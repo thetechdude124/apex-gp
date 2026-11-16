@@ -420,7 +420,7 @@ function setupMenu() {
 }
 
 // Built-in player profiles (pick one in the menu to race as that driver)
-const DRIVERS = [{ name: 'Nico Dascombe', short: 'DAS' }];
+const DRIVERS = [{ name: 'Max Verstappen', short: 'Ver' }];
 function driverProfile() {
   const sel = $('driver').value;
   if (sel !== 'custom' && DRIVERS[+sel]) return DRIVERS[+sel];
