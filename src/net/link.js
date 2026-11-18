@@ -158,7 +158,7 @@ class TabLink extends Link {
   send(obj) { if (this.open) this.bc.postMessage({ to: this.peer, from: this.me, k: 'r', d: obj }); }
   fast(buf) { if (this.open) this.bc.postMessage({ to: this.peer, from: this.me, k: 'u', d: buf }); }
   close() { if (this.open) this.bc.postMessage({ to: this.peer, from: this.me, k: 'bye' }); this._down(); }
-  _in(m) { if (m.k === 'r') this.onmsg?.(m.d); else if (m.k === 'u') this.onfast?.(m.d); else if (m.k === 'bye') this._down(); }
+  _in(m) { if (!this.open) return; if (m.k === 'r') this.onmsg?.(m.d); else if (m.k === 'u') this.onfast?.(m.d); else if (m.k === 'bye') this._down(); }
 }
 
 function tabHost(code, onlink) {
@@ -169,8 +169,14 @@ function tabHost(code, onlink) {
     if (m.k === 'join') { const l = new TabLink(bc, 'host', m.from); links.set(m.from, l); bc.postMessage({ to: m.from, from: 'host', k: 'ok' }); onlink(l); }
     else links.get(m.from)?._in(m);
   };
-  addEventListener('pagehide', () => { for (const l of links.values()) l.close(); });
-  return { code, close() { bc.close(); } };
+  const close = () => {
+    removeEventListener('pagehide', close);
+    for (const link of links.values()) link.close();
+    links.clear();
+    bc.close();
+  };
+  addEventListener('pagehide', close);
+  return { code, close };
 }
 
 function tabJoin(code) {

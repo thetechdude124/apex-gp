@@ -96,8 +96,14 @@ export class Net {
 
   leave() {
     if (!this.role) return;
-    if (this.isHost) { for (const l of this.links.values()) { l.onclose = null; l.send({ t: 'closed' }); setTimeout(() => l.close(), 300); } this.room?.close(); }
-    else if (this.link) { const l = this.link; l.onclose = null; l.send({ t: 'bye' }); setTimeout(() => l.close(), 300); }
+    const links = this.isHost ? this.links.values() : [this.link];
+    for (const link of links) {
+      if (!link) continue;
+      link.onclose = link.onmsg = link.onfast = null;
+      link.send({ t: this.isHost ? 'closed' : 'bye' });
+      setTimeout(() => link.close(), 300);
+    }
+    this.room?.close();
     this.reset();
     this.on.lobby?.();
   }
