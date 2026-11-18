@@ -10,7 +10,7 @@ import { vehicleId, SETUPS } from '../sim/vehicles.js';
 import { hostRoom, joinRoom, newCode, cleanCode, supported } from './link.js';
 
 export { cleanCode, supported };
-export const PROTO = 2;   // players on different versions of the game cannot share a room
+export const PROTO = 3;   // all peers must support the room class rule and the weekly closing time
 export const MAX_PLAYERS = 12;
 const REC = 36;           // bytes per car in a position packet
 const CODES = ['S', 'M', 'H', 'W'];

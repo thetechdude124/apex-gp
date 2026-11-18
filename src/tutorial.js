@@ -112,6 +112,7 @@ const PAGES = [
     body: `
       <p><b>Everyone plays on their own computer.</b> One of you presses <b>PLAY WITH FRIENDS</b> on the main menu, then <b>CREATE A ROOM</b>,
       and sends the others the invite link (or reads out the five-character room code). The others open the link, check their name and team, and press <b>JOIN</b>.</p>
+      <p>Each driver can choose a car independently. The host can lock the room to their class. A GT3 lock lets each driver pick a GT3 make.</p>
       <p><b>The host</b> (whoever made the room) picks the circuit, the laps, the weather and whether computer drivers fill the rest of the grid,
       then presses START RACE. The grid is drawn at random and the lights go out at the same moment for everyone.</p>
       <p><b>In the race</b> everything works as usual: pit stops, DRS, weather, track limits. Friends have their name above their car and a blue row in the

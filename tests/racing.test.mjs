@@ -4,13 +4,43 @@ import { CarBody, SURF, DIFF_DEFAULT, computeProfile } from '../src/sim/physics.
 import { Race } from '../src/sim/race.js';
 import { TRACKS } from '../src/sim/tracks.js';
 import { buildTrack } from '../src/sim/trackgen.js';
-import { carParams, VEHICLES, rivalVehicle } from '../src/sim/vehicles.js';
+import { carParams, VEHICLES, rivalVehicle, roomVehicle } from '../src/sim/vehicles.js';
+import { raceWindow } from '../src/play-hours.js';
 import { takeSnapshot, restoreSnapshot } from '../src/sim/snapshot.js';
 import { cleanProfile } from '../src/net/session.js';
 import { cfg } from '../src/options.js';
 import { prefs } from '../src/prefs.js';
 
 const T = buildTrack(TRACKS[0]);
+
+test('open lobbies keep every requested chassis and class locks preserve eligible models', () => {
+  for (const host of Object.keys(VEHICLES)) {
+    for (const guest of Object.keys(VEHICLES)) {
+      assert.equal(roomVehicle(guest, host, 'mixed'), guest);
+      const sameClass = VEHICLES[guest].classId === VEHICLES[host].classId;
+      assert.equal(roomVehicle(guest, host, 'single'), sameClass ? guest : host);
+    }
+  }
+});
+
+test('race weekends open and close at 4 p.m. Eastern, including both clock-change weekends', () => {
+  for (const [friday, sunday] of [
+    ['2026-11-20T21:00Z', '2026-11-22T21:00Z'],
+    ['2026-07-17T20:00Z', '2026-07-19T20:00Z'],
+    ['2026-03-06T21:00Z', '2026-03-08T20:00Z'],
+    ['2026-10-30T20:00Z', '2026-11-01T21:00Z'],
+  ]) {
+    const start = Date.parse(friday), end = Date.parse(sunday);
+    assert.deepEqual(raceWindow(start - 1), { open: false, boundary: start });
+    assert.deepEqual(raceWindow(start), { open: true, boundary: end });
+    assert.deepEqual(raceWindow(end - 1), { open: true, boundary: end });
+    assert.equal(raceWindow(end).open, false);
+  }
+  assert.deepEqual(raceWindow(Date.parse('2026-11-18T04:00Z')), {
+    open: false, boundary: Date.parse('2026-11-20T21:00Z'),
+  });
+});
+
 const idle = { throttle: 0, brake: 0, steer: 0 };
 const gas = { ...idle, throttle: 1 };
 function raceWith(opts = {}) {

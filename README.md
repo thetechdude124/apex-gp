@@ -4,6 +4,10 @@ A browser racing game with fictional teams and a mix of original and real-world 
 
 [Play Apex Grand Prix](https://thetechdude124.github.io/apex-gp/)
 
+Race weekends open Friday at 4 p.m. and close Sunday at 4 p.m. U.S. Eastern time. The site checks its server clock before loading the game. At closing time, active races and multiplayer rooms end. The downtime screen shows the next opening and reopens automatically.
+
+In **Play with friends**, new rooms start with **Each driver chooses**. The host can switch **Car class rule** to **Lock to host’s class**. A GT3 lock still lets drivers choose different GT3 makes.
+
 Press W, the up arrow, or the controller trigger after lights-out to launch. A new throttle press while all five red lights are on earns a drive-through. An earlier press is free, even if held through the fifth light. Release and press again after lights-out to launch from a hold. Follow the blue pit-entry arrows by the end of lap three, or by the finish on a shorter race, to avoid disqualification. The penalty clears at pit exit. A required tyre change needs its own visit.
 
 A/D or the arrow keys steer. S brakes. Space opens DRS on F1 and F2 in eligible zones. Shift deploys electric boost on F1 and hybrid prototypes. C changes camera and H opens the driving guide.

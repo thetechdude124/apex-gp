@@ -7,7 +7,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { CopyShader } from 'three/addons/shaders/CopyShader.js';
 import { TRACKS } from './sim/tracks.js';
-import { VEHICLES, vehicleId, rivalVehicle, CLASSES } from './sim/vehicles.js';
+import { VEHICLES, vehicleId, rivalVehicle, roomVehicle, CLASSES } from './sim/vehicles.js';
 import { buildTrack } from './sim/trackgen.js';
 import { Race } from './sim/race.js';
 import { AIDriver } from './sim/ai.js';
@@ -31,6 +31,7 @@ import { InputFilter } from './inputfilter.js';
 import { aiParams } from './sim/difficulty.js';
 import { Net, cleanProfile } from './net/session.js';
 import { Lobby } from './lobby.js';
+import { canPlay } from './play-hours.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -384,8 +385,8 @@ function getTrack(id) {
   return trackCache.get(id);
 }
 
-function vehicleOptions() {
-  return Object.entries(CLASSES).map(([cls, label]) => {
+function vehicleOptions(onlyClass) {
+  return Object.entries(CLASSES).filter(([cls]) => !onlyClass || onlyClass === cls).map(([cls, label]) => {
     const choices = Object.entries(VEHICLES).filter(([, v]) => v.classId === cls)
       .map(([id, v]) => `<option value="${id}">${v.name}</option>`).join('');
     return `<optgroup label="${label}">${choices}</optgroup>`;
@@ -519,6 +520,11 @@ function toMenu() {
 // ---------------------------------------------------------------- online
 // (see net/session.js for how a race is shared between machines)
 const net = new Net();
+window.addEventListener('racehoursend', () => {
+  running = false;
+  net.leave();
+  audio.ctx?.suspend();
+});
 const AUTO = new URLSearchParams(location.search);
 const netProfile = () => ({ ...driverProfile(), vehicle: vehicleId($('vehicle').value), downforce: $('downforce').value, team: +$('team').value, car: { custom: cfg.get('livery') === 'custom', color: cfg.get('color'), color2: cfg.get('color2'), number: +cfg.get('number') || 0 } });
 const lobby = new Lobby({
@@ -526,7 +532,7 @@ const lobby = new Lobby({
   setName(v) { $('dname').value = v; $('dname').oninput(); },
   setTeam(i) { $('team').value = i; cfg.set('team', i); },
   setVehicle(v) { $('vehicle').value = vehicleId(v); cfg.set('vehicle', $('vehicle').value); },
-  roomDefaults: () => ({ fieldType: $('fieldType').value, track: AUTO.get('track') || selTrack, laps: clamp(+(AUTO.get('laps') || $('laps').value) || 5, 1, 50), weather: AUTO.get('wx') || $('weather').value, ai: AUTO.get('ai') || 'full', diff: +$('diff').value }),
+  roomDefaults: () => ({ fieldType: 'mixed', track: AUTO.get('track') || selTrack, laps: clamp(+(AUTO.get('laps') || $('laps').value) || 5, 1, 50), weather: AUTO.get('wx') || $('weather').value, ai: AUTO.get('ai') || 'full', diff: +$('diff').value }),
   start: netStart,
 });
 
@@ -544,8 +550,7 @@ function netStart() {
     if (seat < 0) { seat = 1; t = seats.findIndex((x) => x[1] == null); if (t < 0) { seat = 0; t = seats.findIndex((x) => x[0] == null); } }
     if (t < 0) continue;
     seats[t][seat] = p.id;
-    const requested = vehicleId(p.vehicle);
-    const vehicle = mixed || VEHICLES[requested].classId === VEHICLES[hostCar].classId ? requested : hostCar;
+    const vehicle = roomVehicle(p.vehicle, hostCar, c.fieldType);
     grid.push({ vehicle, downforce: p.downforce, o: p.id, ai: 0, team: t, seat, name: p.name, short: p.short, num: p.car.number || TEAMS[t].drivers[seat][2], custom: p.car.custom ? { color: p.car.color, color2: p.car.color2 } : null });
   }
   if (c.ai !== 'none') TEAMS.forEach((team, t) => team.drivers.forEach((d, seat) => {
@@ -707,6 +712,7 @@ function qualiUpdate() {
 }
 
 function startSession(s) {
+  if (!canPlay()) return;
   settings = s; fifthLightShownAt = greenShownAt = throttleEdgeAt = pauseLaunchAt = null;
   inputFilter.speed = s.steerSpeed || 1;
   inputFilter.wheel = inputFilter.throttle = inputFilter.brake = 0;
@@ -722,6 +728,7 @@ function startSession(s) {
   const isQuali = s.mode === 'race' && !s.net && s.grid === 'quali' && s.field.length > 0 && !s.qualiResult;
   $('loadtxt').textContent = isQuali ? 'QUALIFYING · RIVALS ARE SETTING THEIR TIMES' : 'BUILDING CIRCUIT';
   setTimeout(() => {
+    if (!canPlay()) return;
     const T = getTrack(s.track);
     // teardown
     if (world) world.dispose();
@@ -1183,6 +1190,7 @@ let resultsLive = false, resultsT = 0;
 let recorder = null, snaps = [], snapT = 0, rewind = null, replay = null, holdT = 0;
 
 function frame(now) {
+  if (!canPlay()) return;
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;

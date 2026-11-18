@@ -12,6 +12,12 @@
   canvas#view { display: block; width: 100vw; height: 100vh; }
   .hidden { display: none !important; }
   button { font: inherit; cursor: pointer; }
+  #availability:not([hidden]) { display: grid; min-height: 100vh; min-height: 100svh; place-items: center; padding: 24px; background: radial-gradient(ellipse at 25% 0%, #26080a, #090a0e 60%); }
+  #availability section { width: min(100%, 510px); border-top: 4px solid var(--red); padding: 24px 0; }
+  #availability .wordmark { font-weight: 900; font-style: italic; letter-spacing: 1px; }
+  #availability .wordmark b { color: var(--red); }
+  #hoursTitle { font-size: clamp(32px, 6vw, 52px); margin: 24px 0 12px; }
+  #hoursMessage { color: #c4c8d0; line-height: 1.5; }
 
   /* ---------- MENU ---------- */
   #menu { position: fixed; inset: 0; background: radial-gradient(ellipse at 30% 0%, #26080a 0%, #07080c 55%, #000 100%); display: flex; flex-direction: column; padding: 24px 48px; gap: 16px; overflow: auto; z-index: 20; }
@@ -260,6 +266,14 @@
 </script>
 </head>
 <body>
+<main id="availability" aria-live="polite">
+  <section>
+    <div class="wordmark">APEX <b>GRAND PRIX</b></div>
+    <h1 id="hoursTitle">Checking race hours…</h1>
+    <p id="hoursMessage">Race weekends run from Friday at 4 p.m. to Sunday at 4 p.m. Eastern.</p>
+  </section>
+</main>
+<div id="game" hidden>
 <canvas id="view"></canvas>
 
 <div id="menu">
@@ -346,7 +360,11 @@
 <div id="options"></div>
 <div id="lobby"></div>
 <div id="tutorial"></div>
+</div>
 
-<script type="module" src="./src/main.js"></script>
+<script type="module">
+  import { watchRaceHours } from './src/play-hours.js';
+  watchRaceHours();
+</script>
 </body>
 </html>

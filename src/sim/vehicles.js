@@ -35,6 +35,12 @@ export const VEHICLES = {
 
 export function vehicleId(id) { return Object.hasOwn(VEHICLES, id) ? id : 'f1'; }
 
+// A class lock still allows different models within the host's class (e.g. two GT3 makes).
+export function roomVehicle(requested, hostVehicle, fieldType) {
+  const car = vehicleId(requested), host = vehicleId(hostVehicle);
+  return fieldType === 'single' && VEHICLES[car].classId !== VEHICLES[host].classId ? host : car;
+}
+
 export function carParams(vehicle = 'f1', setup = 'balanced', human = false) {
   const id = vehicleId(vehicle);
   const preset = Object.hasOwn(SETUPS, setup) ? setup : 'balanced';

@@ -1,6 +1,6 @@
 // "Play with friends": create a room or join one with its code, see who is in, and (as the host)
 // choose the circuit and start the race for everyone.
-import { VEHICLES, vehicleId } from './sim/vehicles.js';
+import { CLASSES, VEHICLES, vehicleId, roomVehicle } from './sim/vehicles.js';
 import { cleanCode, supported, MAX_PLAYERS } from './net/session.js';
 
 const WHY = {
@@ -25,7 +25,7 @@ export class Lobby {
         <div class="lhead"><span>PLAY WITH FRIENDS</span><button id="lClose">BACK ✕</button></div>
         <div class="lme">
           <label>Your name<input type="text" id="lName" maxlength="24" placeholder="Your name" autocomplete="off" spellcheck="false"></label>
-          <label>Your car<select id="lVehicle">${api.vehicleOptions()}</select></label>
+          <label>Your car<select id="lVehicle" aria-describedby="lClassNote"></select><small id="lClassNote" hidden></small></label>
           <label>Team<select id="lTeam">${api.teams.map((t, i) => opt(i, t.name)).join('')}</select></label>
         </div>
         <div id="lEntry">
@@ -42,7 +42,7 @@ export class Lobby {
               <label>Circuit<select id="lTrack">${api.tracks.map((t) => opt(t.id, t.name)).join('')}</select></label>
               <label>Laps<input type="number" id="lLaps" min="1" max="50"></label>
               <label>Weather<select id="lWeather">${opt('random', 'Random')}${opt('dry', 'Dry')}${opt('changing', 'Changeable')}${opt('wet', 'Rain all race')}</select></label>
-              <label>Grid classes<select id="lField">${opt('single', "Host’s class")}${opt('mixed', 'Multi-class')}</select></label>
+              <label>Car class rule<select id="lField">${opt('mixed', 'Each driver chooses')}${opt('single', 'Lock to host’s class')}</select></label>
               <label>Computer drivers<select id="lAi">${opt('full', 'Fill the grid (20 cars)')}${opt('none', 'None: friends only')}</select></label>
               <label id="lDiffL">Their skill: <span id="lDiffV"></span><input type="range" id="lDiff" min="0" max="110"></label>
             </div>
@@ -85,7 +85,7 @@ export class Lobby {
     this.el.style.display = 'flex';
     const p = this.api.profile();
     this.q('lName').value = p.name === 'You' ? '' : p.name;
-    this.q('lTeam').value = p.team; this.q('lVehicle').value = p.vehicle;
+    this.q('lTeam').value = p.team;
     if (!supported()) this.status('This browser cannot make the connections online play needs. Try a current version of Chrome, Edge, Firefox or Safari.', 'err');
     else if (code && !this.net.active) { this.q('lCode').value = cleanCode(code); this.status(`You have been invited to room ${cleanCode(code)}. Check your name and team, then press JOIN.`); }
     this.refresh();
@@ -100,7 +100,11 @@ export class Lobby {
     if (this.busy) return;
     this.busy = true; this.api.audio();
     this.status('Creating the room…');
-    try { await this.net.host(this.api.profile(), this.api.roomDefaults()); this.status(''); }
+    try {
+      await this.net.host(this.api.profile(), this.api.roomDefaults());
+      this.net.setProfile(this.api.profile()); // picks can change while the broker connects
+      this.status('');
+    }
     catch (e) { this.status((WHY[e.message] || WHY.offline)(''), 'err'); }
     this.busy = false; this.refresh();
   }
@@ -112,7 +116,11 @@ export class Lobby {
     this.busy = true; this.api.audio();
     this.status(`Connecting to room ${code}…`);
     this.refresh();
-    try { await this.net.join(code, this.api.profile()); this.status(''); }
+    try {
+      await this.net.join(code, this.api.profile());
+      this.net.setProfile(this.api.profile());
+      this.status('');
+    }
     catch (e) { this.status((WHY[e.message] || WHY.blocked)(code), 'err'); }
     this.busy = false; this.refresh();
   }
@@ -132,6 +140,20 @@ export class Lobby {
     q('lRoom').style.display = inRoom ? '' : 'none';
     q('lClose').style.display = inRoom ? 'none' : '';
     for (const id of ['lCreate', 'lJoin', 'lCode']) q(id).disabled = this.busy || !supported();
+    const hostDriver = net.players.find(p => p.host);
+    const hostCar = vehicleId(hostDriver?.vehicle);
+    const rule = net.cfg?.fieldType;
+    const allowedClass = hostDriver && !net.isHost && rule === 'single' ? VEHICLES[hostCar].classId : '';
+    const picker = q('lVehicle');
+    if (picker.dataset.allowedClass !== allowedClass) {
+      picker.innerHTML = this.api.vehicleOptions(allowedClass);
+      picker.dataset.allowedClass = allowedClass;
+    }
+    const requested = this.api.profile().vehicle;
+    picker.value = allowedClass ? roomVehicle(requested, hostCar, rule) : requested;
+    picker.disabled = picker.options.length === 1;
+    q('lClassNote').hidden = !allowedClass;
+    q('lClassNote').textContent = allowedClass ? `Room locked to ${CLASSES[allowedClass]}` : '';
     if (!inRoom) return;
     q('lCodeBig').textContent = net.code;
     q('lLink').textContent = this.link();
@@ -143,15 +165,14 @@ export class Lobby {
       row.className = 'lp' + (p.id === net.id ? ' me' : '');
       const dot = document.createElement('i'); dot.style.background = p.car.custom ? p.car.color : team.color;
       const name = document.createElement('b'); name.textContent = p.name;
-      const tm = document.createElement('span'); const host = vehicleId(net.players[0]?.vehicle), car = vehicleId(p.vehicle);
-      const actual = net.cfg?.fieldType === 'mixed' || VEHICLES[car].classId === VEHICLES[host].classId ? car : host;
-      tm.textContent = team.name + ' · ' + VEHICLES[actual].name;
+      const tm = document.createElement('span');
+      tm.textContent = team.name + ' · ' + VEHICLES[roomVehicle(p.vehicle, hostCar, rule)].name;
       const tag = document.createElement('em');
       tag.textContent = [p.host ? 'HOST' : '', p.id === net.id ? 'YOU' : '', p.waiting ? 'JOINS NEXT RACE' : '', !p.host && p.ping ? `${Math.round(p.ping)} ms` : ''].filter(Boolean).join(' · ');
       row.append(dot, name, tm, tag);
       list.appendChild(row);
     }
-    const c = net.cfg || {}, host = net.isHost, hostName = net.players.find((p) => p.host)?.name || 'the host';
+    const c = net.cfg || {}, host = net.isHost, hostName = hostDriver?.name || 'the host';
     q('lWho').textContent = host ? '· you choose' : `· chosen by ${hostName}`;
     for (const [id, key] of [['lField', 'fieldType'], ['lTrack', 'track'], ['lLaps', 'laps'], ['lWeather', 'weather'], ['lAi', 'ai'], ['lDiff', 'diff']]) {
       const el = q(id);
