@@ -43,6 +43,7 @@ export function carParams(vehicle = 'f1', setup = 'balanced', human = false) {
   p.ClA *= SETUPS[preset].lift;
   p.CdA *= SETUPS[preset].drag;
   if (human) {
+    p.profileKey += '/human';
     p.aeroBal += 0.01;
     p.rearGrip -= 0.03;
     p.absTurn = 0.88;

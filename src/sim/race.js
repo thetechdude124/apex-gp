@@ -247,6 +247,7 @@ export class Race {
     e.body.setPose(x, y, Math.atan2(T.ty[i], T.tx[i]), v);
     e.idx = i;
     this.updateTrackPos(e);
+    e.dist = e.lap * T.length + e.s;
     e.snap = true; // teleported: don't interpolate across the jump
   }
 

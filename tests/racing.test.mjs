@@ -32,6 +32,18 @@ test('the first post-lights press launches a stationary car and records its reac
   assert.equal(e.driveThroughDue, 0);
 });
 
+test('a stationary pole sitter keeps the lead until a rival actually passes', () => {
+  const r = raceWith({ grid: [{ isPlayer: true }, { vehicle: 'f1', startDelay: 0, skill: 1 }] });
+  runLights(r);
+  r.update(1 / 30, idle);
+  const rival = r.entries[1];
+  assert.ok(rival.body.speed() > 0);
+  assert.ok(rival.s < r.player.s);
+  assert.equal(r.player.pos, 1);
+  for (let i = 0; i < 240 && r.player.pos === 1; i++) r.update(1 / 60, idle);
+  assert.equal(r.player.pos, 2);
+});
+
 test('holding through lights-out earns one penalty and requires release and reapplication', () => {
   const r = raceWith(), e = r.player;
   runLights(r, gas);
@@ -168,6 +180,7 @@ test('mixed and single-class grids, AI profiles and online vehicle selection', (
   assert.equal(r.player.body.p.ersCap, 0);
   assert.equal(r.player.body.p.drsCd, 0);
   assert.notEqual(r.profileFor(1,1,1,r.entries[1].body.p), r.profileFor(1,1,1,r.player.body.p));
+  assert.ok(r.profileFor(1,1,1,carParams('porsche')) !== r.profileFor(1,1,1,r.player.body.p));
   assert.ok(computeProfile(T, T.rl, carParams('f1')).lap < computeProfile(T, T.rl, carParams('porsche')).lap);
 });
 
