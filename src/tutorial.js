@@ -73,12 +73,9 @@ const PAGES = [
       <p class="tnote">Slow in, fast out. If you keep sliding wide, you are arriving too fast: brake a little earlier.</p>`,
   },
   {
-    title: 'Qualifying and the start',
+    title: 'Grid position and the start',
     body: `
-      <p><b>Qualifying.</b> Before the race you get the track to yourself for <b>one flying lap</b>. You roll up to the start line, and the clock
-      runs from the moment you cross it until you cross it again. Your time against the other drivers' times decides where you start.
-      Stay inside the white lines: a lap with all four wheels off the track is deleted, and you get one more try.
-      You can skip qualifying by choosing a fixed or random grid slot in the menu.</p>
+      <p><b>Grid position.</b> Choose Random to draw a starting spot or Custom to pick a position from P1 to the back of your field.</p>
       <div class="tlights"><i></i><i></i><i></i><i></i><i></i></div>
       <p><b>The start.</b> Five red lights come on one by one. Keep the throttle released. When all five go <b>out</b>, press your accelerator key or squeeze the trigger.
       An early press earns a drive-through. Release and press again to launch, then follow the pit-entry arrows by the end of lap three (or the final lap on a shorter race).

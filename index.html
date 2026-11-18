@@ -31,6 +31,9 @@
   .settings label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: #9aa0aa; letter-spacing: 1.2px; text-transform: uppercase; }
   .settings select, .settings input[type=number] { background: #1a1d26; color: #fff; border: 1px solid #2a2e3a; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
   .settings input[type=range] { accent-color: var(--red); }
+  #weatherPool { margin: 0; border: 1px solid #2a2e3a; border-radius: 6px; padding: 8px; }
+  #weatherPool legend { color: #c4c8d0; font-size: 12px; }
+  #weatherPool label { display: inline-flex; flex-direction: row; align-items: center; text-transform: none; letter-spacing: normal; margin-right: 8px; }
   .settings .full { grid-column: 1 / -1; }
   .seg { display: flex; gap: 0; border: 1px solid #2a2e3a; border-radius: 6px; overflow: hidden; }
   .seg button { flex: 1; background: #1a1d26; color: #c4c8d0; border: 0; padding: 6px 6px; font-size: 13px; font-weight: 700; }
@@ -270,15 +273,21 @@
     </div>
     <div class="settings">
       <label class="full">Mode<div class="seg" id="mode"><button data-v="race" class="on">GRAND PRIX</button><button data-v="trial">TIME TRIAL</button></div></label>
-      <label>Driver<select id="driver"></select><input type="text" id="dname" maxlength="24" placeholder="Your name" autocomplete="off" spellcheck="false"></label>
+      <label>Driver name<input type="text" id="dname" maxlength="24" placeholder="Your name" autocomplete="off" spellcheck="false"></label>
       <label>Team<select id="team"></select></label>
       <label>Your car<select id="vehicle"></select></label>
       <label>Downforce<select id="downforce"><option value="low">Low · straight-line speed</option><option value="balanced">Medium · balanced</option><option value="high">High · cornering grip</option></select></label>
       <label>Grid classes<select id="fieldType"><option value="single">My class only</option><option value="mixed">Multi-class</option></select></label>
       <label>Laps<input type="number" id="laps" min="1" max="50" value="5"></label>
       <label>Rivals' skill: <span id="diffv">30</span><input type="range" id="diff" min="0" max="110" value="30"></label>
-      <label>Starting grid<select id="grid"><option value="quali" selected>Qualify for it (one flying lap)</option><option value="random">Random slot</option><option value="mid">Midfield (P10)</option><option value="pole">Pole position</option><option value="back">Back of the grid</option></select></label>
+      <label>Qualifying position<select id="grid"><option value="random">Random</option><option value="custom">Custom</option></select></label>
+      <label class="hidden" id="positionField">Starting position<select id="gridPosition"></select></label>
       <label>Weather<select id="weather"><option value="random" selected>Random</option><option value="dry">Dry</option><option value="changing">Changeable (rain comes or goes)</option><option value="wet">Rain all race</option></select></label>
+      <fieldset class="full" id="weatherPool"><legend>Include in random weather</legend>
+        <label><input type="checkbox" value="dry" checked>Dry</label>
+        <label><input type="checkbox" value="changing" checked>Changeable</label>
+        <label><input type="checkbox" value="wet" checked>Rain all race</label>
+      </fieldset>
       <button id="go">START ▸</button>
       <button id="mpBtn" class="full">PLAY WITH FRIENDS<small>online · each on your own computer, one invite link</small></button>
       <button id="optBtn" class="full">ADVANCED SETTINGS<small>driving aids · race rules · controls · view · my car</small></button>

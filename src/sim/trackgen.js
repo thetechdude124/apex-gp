@@ -387,6 +387,11 @@ export function buildTrack(def) {
     const end = (r.a + r.len - Math.round(100 / ds)) % N;
     return { start, end, detect: (start - Math.round(180 / ds) + N) % N };
   });
+  if (def.sectorMetres) T.sectors = [0, ...def.sectorMetres.map(m => Math.round(m / ds))];
+  if (def.drsMetres) {
+    const { detect, start, end } = def.drsMetres;
+    T.drs = [{ detect: Math.round(detect / ds), start: Math.round(start / ds), end: Math.round(end / ds) }];
+  }
   T.distBoards = [];
 
   const lim = T.width / 2 - (def.lineMargin ?? 1.1);

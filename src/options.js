@@ -8,7 +8,7 @@ export const CAM_FOV = { 'TV POD': 50, COCKPIT: 68, CHASE: 60, 'FAR CHASE': 60 }
 
 const DEFAULTS = {
   // menu essentials
-  mode: 'race', laps: 5, diff: 30, team: 3, grid: 'quali', weather: 'random',
+  mode: 'race', laps: 5, diff: 30, team: 3, grid: 'random', gridPosition: 1, weather: 'random',
   // race
   opps: 19, pits: 'required', tyres: 'M', time: '', limits: 'on',
   // assists

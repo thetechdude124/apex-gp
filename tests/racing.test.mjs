@@ -198,3 +198,29 @@ test('DRS still needs the zone and eligibility, and braking closes the flap', ()
     assert.equal(e.body.drsOpen, false);
   }
 });
+
+test('Imola preserves lap length, corner elevations and the main-straight DRS zone', () => {
+  const track = buildTrack(TRACKS.find(t => t.id === 'imola'));
+  assert.ok(Math.abs(track.length - 4909) < 0.5);
+  const height = metres => track.h[Math.round(metres / track.ds)];
+  assert.ok(Math.abs(height(2325) - height(2740) - 21.09) < 0.6);
+  assert.ok(Math.abs(height(3360) - height(2740) - 18.90) < 0.6);
+  assert.ok(Math.abs(Math.min(...track.grade) + 0.091) < 0.002);
+  assert.ok(Math.abs(Math.max(...track.grade) - 0.0938) < 0.002);
+  assert.equal(track.drs.length, 1);
+  assert.ok(track.drs[0].start > track.drs[0].end);
+});
+
+test('changeable weather starts partway through a one-lap race or an open time trial', () => {
+  for (const mode of ['race', 'trial']) {
+    const r = raceWith({ laps: 1, mode, weather: 'raining', changeAt: 0.4 });
+    if (mode === 'race') runLights(r);
+    r.updatePositions();
+    r.weatherUpdate(0.1);
+    assert.equal(r.changing, false);
+    r.player.dist = 1.85 * T.length;
+    r.weatherUpdate(0.1);
+    assert.equal(r.changing, true);
+    assert.ok(r.rain > 0);
+  }
+});

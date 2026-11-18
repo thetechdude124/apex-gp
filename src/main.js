@@ -358,7 +358,7 @@ let mfd = null, sideGlass = null, fadedHalo = null;
 const mirror = new Mirror(renderer);
 let mirrorOn = true, mirrorRect = null;
 const tutorial = new Tutorial();
-const options = new Options(() => applyLive());
+const options = new Options(() => { syncGridPosition(); applyLive(); });
 
 // ---------------------------------------------------------------- menu
 function drawTrackPreview(cv, T) {
@@ -378,6 +378,7 @@ function drawTrackPreview(cv, T) {
 }
 
 function getTrack(id) {
+  if (!TRACKS.some(t => t.id === id)) id = TRACKS[0].id;
   if (!trackCache.has(id)) trackCache.set(id, buildTrack(TRACKS.find((t) => t.id === id)));
   return trackCache.get(id);
 }
@@ -391,6 +392,20 @@ function vehicleOptions() {
 }
 
 let selTrack = TRACKS[0].id;
+function syncGridPosition() {
+  const position = $('gridPosition');
+  const count = clamp(+cfg.get('opps') + 1, 1, 20);
+  if (position.options.length !== count) {
+    position.replaceChildren(...Array.from({ length: count }, (_, i) => new Option('P' + (i + 1), i + 1)));
+  }
+  position.value = clamp(cfg.get('gridPosition'), 1, count);
+  $('positionField').classList.toggle('hidden', cfg.get('mode') !== 'race' || $('grid').value !== 'custom');
+}
+
+function weatherChoices() {
+  return Array.from($('weatherPool').querySelectorAll('input:checked'), el => el.value);
+}
+
 function setupMenu() {
   const tracksEl = $('tracks');
   TRACKS.forEach((def) => {
@@ -410,7 +425,7 @@ function setupMenu() {
   TEAMS.forEach((t, i) => { const o = document.createElement('option'); o.value = i; o.textContent = t.name; teamSel.appendChild(o); });
   // the few things on the menu itself; they are remembered like every other setting
   const modeSeg = $('mode');
-  const setMode = (v) => { modeSeg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.v === v)); cfg.set('mode', v); for (const id of ['laps', 'grid', 'fieldType', 'weather', 'diff']) $(id).closest('label').style.display = v === 'trial' && id !== 'weather' ? 'none' : ''; };
+  const setMode = (v) => { modeSeg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.v === v)); cfg.set('mode', v); syncGridPosition(); for (const id of ['laps', 'grid', 'fieldType', 'weather', 'diff']) $(id).closest('label').style.display = v === 'trial' && id !== 'weather' ? 'none' : ''; };
   modeSeg.querySelectorAll('button').forEach((b) => (b.onclick = () => setMode(b.dataset.v)));
   for (const id of ['team', 'laps', 'diff', 'grid', 'weather', 'vehicle', 'downforce', 'fieldType']) {
     const el = $(id);
@@ -422,6 +437,13 @@ function setupMenu() {
     el.addEventListener('input', () => { if (id !== 'weather') cfg.set(id, el.type === 'number' || el.type === 'range' || id === 'team' ? +el.value : el.value); if (id === 'diff') $('diffv').textContent = el.value; });
   }
   $('diffv').textContent = $('diff').value;
+  $('grid').addEventListener('change', syncGridPosition);
+  $('gridPosition').onchange = () => cfg.set('gridPosition', +$('gridPosition').value);
+  $('weather').onchange = () => $('weatherPool').hidden = $('weather').value !== 'random';
+  $('weatherPool').onchange = () => {
+    const onlyOne = weatherChoices().length === 1;
+    for (const box of $('weatherPool').querySelectorAll('input')) box.disabled = onlyOne && box.checked;
+  };
   setMode(cfg.get('mode'));
   $('go').onclick = () => { audio.init(); startSession(readSettings()); };
   $('mpBtn').onclick = () => lobby.open();
@@ -433,24 +455,14 @@ function setupMenu() {
   $('pHelp').onclick = () => tutorial.open();
   $('optBtn').onclick = () => options.open('assists');
   $('pOptions').onclick = () => options.open();
-  // driver profile: a preset or your own name, remembered in this browser
-  const drv = $('driver'), nm = $('dname');
-  DRIVERS.forEach((d, i) => { const o = document.createElement('option'); o.value = i; o.textContent = d.name; drv.appendChild(o); });
-  { const o = document.createElement('option'); o.value = 'custom'; o.textContent = 'Custom name…'; drv.appendChild(o); }
-  drv.value = prefs.get('driver', 'custom');
-  if (drv.selectedIndex < 0) drv.value = 'custom';
+  const nm = $('dname');
   nm.value = prefs.get('driverName', '');
-  const syncDrv = () => { nm.style.display = drv.value === 'custom' ? '' : 'none'; prefs.set('driver', drv.value); prefs.set('driverName', nm.value.trim()); };
-  drv.onchange = syncDrv; nm.oninput = syncDrv; syncDrv();
+  nm.oninput = () => prefs.set('driverName', nm.value.trim());
   renderHelp();
   tutorial.firstRun();
 }
 
-// Built-in player profiles (pick one in the menu to race as that driver)
-const DRIVERS = [{ name: 'Max Verstappen', short: 'Ver' }];
 function driverProfile() {
-  const sel = $('driver').value;
-  if (sel !== 'custom' && DRIVERS[+sel]) return DRIVERS[+sel];
   const name = $('dname').value.trim().replace(/[<>&]/g, '').slice(0, 24);
   if (!name) return { name: 'You', short: 'YOU' };
   const last = name.split(/\s+/).pop().replace(/[^A-Za-zÀ-ÿ]/g, '');
@@ -468,7 +480,7 @@ function readSettings() {
   const custom = cfg.get('livery') === 'custom';
   return {
     track: selTrack, vehicle: vehicleId($('vehicle').value), downforce: $('downforce').value, mixed: $('fieldType').value === 'mixed', mode: cfg.get('mode'), laps: clamp(+$('laps').value || 5, 1, 50), opps: clamp(+cfg.get('opps'), 0, 19),
-    diff: +$('diff').value, team: +$('team').value, grid: $('grid').value, weather: $('weather').value, tyres: cfg.get('tyres'), time: cfg.get('time'),
+    diff: +$('diff').value, team: +$('team').value, grid: $('grid').value, gridPosition: +$('gridPosition').value, weatherPool: weatherChoices(), weather: $('weather').value, tyres: cfg.get('tyres'), time: cfg.get('time'),
     tc: on('tc'), abs: on('abs'), steerAssist: on('stability'), steerSpeed: cfg.get('steerSpeed') / 100, brakeAssist: on('brakeAssist'), manual: cfg.get('gearbox') === 'manual', line: on('line'),
     driver: driverProfile(), car: { custom, color: cfg.get('color'), color2: cfg.get('color2'), number: +cfg.get('number') || 0 },
     quality: cfg.get('quality'), pits: cfg.get('pits'), limits: cfg.get('limits'), rotation: cfg.get('diffOpen'), mirror: on('mirror'), drsAuto: cfg.get('drs') === 'assist',
@@ -510,7 +522,7 @@ const AUTO = new URLSearchParams(location.search);
 const netProfile = () => ({ ...driverProfile(), vehicle: vehicleId($('vehicle').value), downforce: $('downforce').value, team: +$('team').value, car: { custom: cfg.get('livery') === 'custom', color: cfg.get('color'), color2: cfg.get('color2'), number: +cfg.get('number') || 0 } });
 const lobby = new Lobby({
   net, tracks: TRACKS, teams: TEAMS, vehicleOptions, profile: netProfile, audio: () => audio.init(),
-  setName(v) { $('driver').value = 'custom'; $('dname').value = v; $('dname').oninput(); },
+  setName(v) { $('dname').value = v; $('dname').oninput(); },
   setTeam(i) { $('team').value = i; cfg.set('team', i); },
   setVehicle(v) { $('vehicle').value = vehicleId(v); cfg.set('vehicle', $('vehicle').value); },
   roomDefaults: () => ({ fieldType: $('fieldType').value, track: AUTO.get('track') || selTrack, laps: clamp(+(AUTO.get('laps') || $('laps').value) || 5, 1, 50), weather: AUTO.get('wx') || $('weather').value, ai: AUTO.get('ai') || 'full', diff: +$('diff').value }),
@@ -539,7 +551,7 @@ function netStart() {
     if (seats[t][seat] == null) grid.push({ vehicle: rivalVehicle(opponent++, hostCar, mixed), o: 0, ai: 1, team: t, seat, ...aiParams(c.diff, team.pace, seat), c: ['S', 'S', 'M', 'M', 'M', 'H'][Math.floor(Math.random() * 6)] });
   }));
   for (let i = grid.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [grid[i], grid[j]] = [grid[j], grid[i]]; } // the grid is drawn at random
-  net.startRace({ track: c.track, laps: c.laps, wx: pickWeather(c.weather, 'race'), changeAt: 0.26 + Math.random() * 0.3,
+  net.startRace({ track: c.track, laps: c.laps, wx: pickWeather(c.weather, weatherChoices()), changeAt: 0.26 + Math.random() * 0.3,
     pits: cfg.get('pits'), limits: cfg.get('limits'), time: cfg.get('time'), grid, takeover: aiParams(c.diff, 1, 1) });
 }
 
@@ -597,9 +609,9 @@ net.on.end = () => { if (running) toMenu(); lobby.show(); };
 net.on.closed = (why) => { if (running && settings?.net) toMenu(); lobby.show(why); };
 
 // ---------------------------------------------------------------- session
-function pickWeather(w, mode) {
-  if (w === 'random') { const r = Math.random(); w = mode !== 'race' ? 'dry' : r < 0.62 ? 'dry' : r < 0.84 ? 'changing' : 'wet'; }
-  if (w === 'changing') w = mode !== 'race' ? 'dry' : Math.random() < 0.6 ? 'raining' : 'drying';
+function pickWeather(w, pool = ['dry', 'changing', 'wet']) {
+  if (w === 'random') w = pool[Math.floor(Math.random() * pool.length)];
+  if (w === 'changing') w = Math.random() < 0.5 ? 'raining' : 'drying';
   return ['dry', 'wet', 'raining', 'drying'].includes(w) ? w : 'dry';
 }
 
@@ -641,7 +653,7 @@ function buildGrid(s) {
     const by = new Map(ai.map((a) => [a.name, a]));
     return s.qualiResult.map((r) => (r.isPlayer ? me : by.get(r.name)));
   }
-  const slot = s.grid === 'pole' ? 0 : s.grid === 'back' ? ai.length : s.grid === 'mid' ? Math.min(9, ai.length) : Math.floor(Math.random() * (ai.length + 1));
+  const slot = s.grid === 'custom' ? clamp(s.gridPosition - 1, 0, ai.length) : s.grid === 'pole' ? 0 : s.grid === 'back' ? ai.length : s.grid === 'mid' ? Math.min(9, ai.length) : Math.floor(Math.random() * (ai.length + 1));
   ai.splice(slot, 0, me);
   return ai;
 }
@@ -703,9 +715,8 @@ function startSession(s) {
   $('podium').style.display = 'none';
   $('loading').classList.remove('hidden');
   if (s.mode === 'race' && !s.field && !s.net) s.field = makeField(s);
-  // Weather for the event (qualifying and the race share it). Random: mostly dry, sometimes it
-  // changes during the race, sometimes it rains throughout.
-  if (!s.wx) s.wx = pickWeather(s.weather, s.mode); // 'dry' | 'wet' | 'raining' (dry start, rain arrives) | 'drying' (wet start, dries out)
+  // Weather for the event (qualifying and the race share it). Draw once from the enabled forecasts.
+  if (!s.wx) s.wx = pickWeather(s.weather, s.weatherPool); // 'dry' | 'wet' | 'raining' (dry start, rain arrives) | 'drying' (wet start, dries out)
   // qualifying first, when the grid is to be earned
   const isQuali = s.mode === 'race' && !s.net && s.grid === 'quali' && s.field.length > 0 && !s.qualiResult;
   $('loadtxt').textContent = isQuali ? 'QUALIFYING · RIVALS ARE SETTING THEIR TIMES' : 'BUILDING CIRCUIT';
@@ -1523,7 +1534,7 @@ if (AUTO.get('host')) {
 {
   const q = new URLSearchParams(location.search);
   if (q.get('auto')) {
-    selTrack = q.get('auto');
+    selTrack = TRACKS.find(t => t.id === q.get('auto'))?.id ?? TRACKS[0].id;
     const s = readSettings();
     if (q.get('mode')) s.mode = q.get('mode');
     if (q.has('vehicle')) s.vehicle = vehicleId(q.get('vehicle'));

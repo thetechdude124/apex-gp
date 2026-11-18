@@ -1,7 +1,7 @@
 // Circuits, defined as filleted polygons: [x, y, cornerRadius] in metres.
 // The racing surface is the smooth path that runs straight between vertices and arcs
 // around each vertex with the given radius. elev: [lap fraction, metres] keyframes.
-import { SKETCH_PATH } from './track_sketch.js';
+import { IMOLA_PATH } from './track_imola.js';
 
 export const TRACKS = [
   {
@@ -129,22 +129,24 @@ export const TRACKS = [
     time: 'day',
   },
   {
-    id: 'sketch',
-    name: 'Sketchbook Circuit',
-    country: 'Drawn by hand',
-    blurb: 'Traced from a pencil sketch. A long pit straight into a sharp hairpin, then a tight, twisting infield where the road doubles back on itself.',
+    id: 'imola',
+    name: 'Imola · Autodromo Enzo e Dino Ferrari',
+    country: 'Imola, Bologna, Italy',
+    blurb: 'Attack the Tamburello chicane, climb from Tosa to the blind Piratella crest, then brake downhill into Acque Minerali and Rivazza.',
     width: 12,
-    startOffset: 385,
-    path: SKETCH_PATH,
-    smooth: 60,
-    pitSide: 1,
-    pitScale: 0.82,
-    wallBase: 13.5,
-    runoff: 22,
-    drsZones: 1,
-    drsMin: 240,
-    drsCurv: 1 / 360,
-    elev: [[0, 0], [0.15, 3], [0.3, 8], [0.45, 11], [0.6, 5], [0.75, -2], [0.9, -1]],
+    path: IMOLA_PATH,
+    smooth: 220,
+    pitSide: -1,
+    sectorMetres: [1585, 3170],
+    drsMetres: { detect: 3760, start: 4645, end: 613 },
+    // Lap metres and heights above sea level from the operator’s corner map.
+    // Intermediate points interpolate the climbs and descents between measured corners.
+    elev: [[0, 40.8], [315, 41.69], [703, 41.95], [758, 41.95], [885, 42.65],
+      [1330, 43.91], [1420, 44.52], [1705, 51.18], [1805, 57.4], [2090, 69.86],
+      [2325, 71.80], [2485, 66.52], [2536, 64.5], [2696, 52.1], [2740, 50.71],
+      [2854, 50.94], [2925, 56.45], [3040, 66.2], [3200, 68.1], [3360, 69.61],
+      [3390, 69.73], [3640, 64.73], [3970, 53.40], [4145, 41.03], [4275, 38.89],
+      [4515, 38.48], [4608, 39.66]].map(([m, h]) => [m / 4909, h - 40.8]),
     scenery: 'med',
     time: 'day',
   },

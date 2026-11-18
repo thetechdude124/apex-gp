@@ -172,9 +172,10 @@ export class Race {
 
   weatherUpdate(dt) {
     const plan = this.weatherPlan;
-    if ((plan === 'raining' || plan === 'drying') && this.mode === 'race' && this.racing) {
+    if ((plan === 'raining' || plan === 'drying') && this.racing) {
       const lead = this.order && this.order[0];
-      const prog = lead ? lead.dist / (this.laps * this.T.length) : 0;
+      const eventLaps = this.mode === 'trial' ? 2 : this.laps;
+      const prog = lead ? Math.max(0, lead.dist / this.T.length - 1) / eventLaps : 0;
       const say = (text, type = 'radio') => this.events.push({ t: this.time, type, text });
       if (!this.changing && !this.warned && prog >= this.changeAt - 0.07) { this.warned = true; say(plan === 'raining' ? 'RAIN IS ON THE WAY' : 'THE RAIN IS EASING: TRACK WILL DRY'); }
       if (!this.changing && prog >= this.changeAt && prog < 0.9) { this.changing = true; say(plan === 'raining' ? 'RAIN: PIT FOR WET TYRES' : 'TRACK IS DRYING: PIT FOR SLICK TYRES', 'warn'); }
