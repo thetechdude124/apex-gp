@@ -19,6 +19,10 @@ export class Audio {
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.noiseBuf = buf;
+    // Sum alternating three-cylinder banks. The bank pulse repeats at 1.5 times crank
+    // speed, with the strongest harmonics at the combined six-cylinder firing rate.
+    const harmonics = Float32Array.from([0, .22, 1, .12, .58, .09, .41, .06, .26, .04, .16, .03, .09]);
+    this.boxerWave = ctx.createPeriodicWave(new Float32Array(harmonics.length), harmonics);
     this.player = this.makeEngine(1.0);
     this.rivals = [this.makeEngine(0.5), this.makeEngine(0.5), this.makeEngine(0.5)];
     // tyre squeal
@@ -85,7 +89,7 @@ export class Audio {
       const o = ctx.createOscillator(); o.type = type;
       const g = ctx.createGain(); g.gain.value = gain;
       o.connect(g).connect(mix); o.start();
-      oscs.push({ o, mult });
+      oscs.push({ o, mult, type, g, gain });
     }
     // turbo whistle
     const turbo = ctx.createOscillator(); turbo.type = 'sine';
@@ -96,16 +100,26 @@ export class Audio {
     out.connect(this.master);
     return { out, oscs, lp, pan, level, turbo, tg, mix };
   }
-  setEngine(e, rpm, throttle, gain, panv = 0, doppler = 1) {
+  setEngine(e, rpm, throttle, gain, panv = 0, doppler = 1, vehicle = 'f1') {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const f = (rpm / 60) * 3 * doppler; // 6 cylinders, 4-stroke -> 3 firings/rev
+    const boxer = vehicle === 'porsche';
+    if (e.boxer !== boxer) {
+      e.boxer = boxer;
+      for (const [i, voice] of e.oscs.entries()) {
+        if (boxer && i === 0) voice.o.setPeriodicWave(this.boxerWave);
+        else voice.o.type = voice.type;
+        voice.g.gain.setTargetAtTime(boxer ? (i === 0 ? 1.12 : 0) : voice.gain, t, 0.015);
+      }
+      e.lp.Q.value = boxer ? 0.8 : 3;
+    }
     for (const { o, mult } of e.oscs) o.frequency.setTargetAtTime(f * mult * 0.5, t, 0.015);
     if (e === this.player && t < this.blipUntil) throttle = Math.max(throttle, 0.95); // downshift blip
-    e.lp.frequency.setTargetAtTime(500 + throttle * 3500 + rpm * 0.15, t, 0.03);
+    e.lp.frequency.setTargetAtTime(boxer ? 450 + throttle * 2350 + rpm * 0.21 : 500 + throttle * 3500 + rpm * 0.15, t, 0.03);
     e.out.gain.setTargetAtTime(gain * e.level * (0.35 + throttle * 0.65), t, 0.03);
     e.turbo.frequency.setTargetAtTime(700 + rpm * 0.08, t, 0.05);
-    e.tg.gain.setTargetAtTime(gain * 0.006 * throttle, t, 0.05);
+    e.tg.gain.setTargetAtTime((boxer ? 0 : gain) * 0.006 * throttle, t, 0.05);
     if (e.pan) e.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, panv)), t, 0.05);
   }
   setSqueal(a) { if (this.ctx) this.squeal.g.gain.setTargetAtTime(a * 0.18, this.ctx.currentTime, 0.04); }
@@ -124,6 +138,14 @@ export class Audio {
   setTurbo(rpm, throttle, dt) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
+    if (this.player.boxer) {
+      this.spool = 0;
+      this.lastThr = throttle;
+      this.turboAir.g.gain.setTargetAtTime(0, t, 0.03);
+      this.whistleG.gain.setTargetAtTime(0, t, 0.03);
+      this.blownG.gain.setTargetAtTime(0, t, 0.03);
+      return;
+    }
     const revs = Math.min(1, Math.max(0, (rpm - 5000) / 6500));
     const want = throttle * revs;
     this.spool += (want - this.spool) * Math.min(1, dt * (want > this.spool ? 2.2 : 4.5));

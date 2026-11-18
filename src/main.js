@@ -1126,7 +1126,7 @@ function updateCamera(dt) {
 function updateAudio() {
   if (!audio.ctx || paused || (player.dsq && !replay)) return;
   const b = player.body;
-  audio.setEngine(audio.player, b.rpm, player.input?.throttle ?? 0, camMode <= 1 ? 0.85 : 0.7);
+  audio.setEngine(audio.player, b.rpm, player.input?.throttle ?? 0, camMode <= 1 ? 0.85 : 0.7, 0, 1, player.vehicle);
   if (b.gear !== lastGear) {
     if (b.gear > lastGear && lastGear >= 1) audio.upshift(0.2);
     else if (b.gear < lastGear && b.gear >= 1) audio.downshift(0.3);
@@ -1160,7 +1160,7 @@ function updateAudio() {
     const radial = rel.clone().normalize().dot(ov.clone().sub(pv));
     const doppler = clamp(1 - radial / 343, 0.8, 1.25);
     const g = 1 / Math.pow(1 + n.d / 12, 1.3);
-    audio.setEngine(eng, ob.rpm, n.c.e.input?.throttle ?? 0.5, g * 1.4, pan, doppler);
+    audio.setEngine(eng, ob.rpm, n.c.e.input?.throttle ?? 0.5, g * 1.4, pan, doppler, n.c.e.vehicle);
   });
 }
 

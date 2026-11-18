@@ -16,8 +16,8 @@ const gt3 = {
 };
 
 export const VEHICLES = {
-  f1: { name: 'Formula One', classId: 'f1', params: {} },
-  f2: { name: 'Formula Two', classId: 'f2', params: {
+  f1: { name: 'Formula One · Sawtooth', classId: 'f1', params: {} },
+  f2: { name: 'Formula Two · Switchback', classId: 'f2', params: {
     mass: 795, Iz: 1020, a: 1.79, b: 1.34, h: 0.32, ClA: 3.15, CdA: 1.26, mu: 1.65,
     P: 465e3, ersP: 0, ersCap: 0, drsCd: 0.23, drsCl: 0.57, brakeForce: 41500,
     rpmMax: 8750, rpmIdle: 3000, gears: [25, 39, 52, 64, 77, 92],

@@ -262,8 +262,8 @@ function mirrored(g, shiftUV) {
 // ------------------------------------------------------------------ shared geometry (built once)
 const formulaGeometry = new Map();
 const FORMULA = {
-  f1: { noseWidth: 1, podWidth: 1, podHeight: 1, taper: 0, sweep: 0.30, fin: 1 },
-  f2: { noseWidth: 1.35, podWidth: 1.14, podHeight: 1.10, taper: 0.065, sweep: 0.19, fin: 0.79 },
+  f1: { noseWidth: 1.6, podWidth: 1.07, podHeight: 1.18, taper: 0.06, sweep: 0.38, fin: 1.12, kit: 'gills', droop: 0.025 },
+  f2: { noseWidth: 1.48, podWidth: 1.14, podHeight: 1.17, taper: 0.065, sweep: 0.19, fin: 0.98, kit: 'gills', podSquare: 4.5, droop: 0.04 },
 };
 function buildGeometry(vehicle) {
   if (formulaGeometry.has(vehicle)) return formulaGeometry.get(vehicle);
@@ -291,7 +291,11 @@ function buildGeometry(vehicle) {
     { x: -2.25, w: 0.075, y0: 0.255, y1: 0.405, n: 2.2 },
     { x: -2.38, w: 0.045, y0: 0.290, y1: 0.375, n: 2.2 },
   ];
-  for (const s of mono) s.w *= 1 + (shape.noseWidth - 1) * THREE.MathUtils.smoothstep(s.x, 1.15, 2.95);
+  for (const s of mono) {
+    const front = THREE.MathUtils.smoothstep(s.x, 1.15, 2.95);
+    s.w *= 1 + (shape.noseWidth - 1) * front;
+    s.y0 += (shape.droop || 0) * front; s.y1 += (shape.droop || 0) * front;
+  }
   paintR.push(halfLoft(mono, 14));
   // cockpit opening: a dark panel that hugs the top of the tub around the driver
   {
@@ -342,12 +346,22 @@ function buildGeometry(vehicle) {
     { x: -2.05, w: 0.030, y0: 0.080, y1: 0.120, n: 2.2, zo: -0.18 },
   ];
   for (const s of pod) {
+    if (shape.podSquare) s.n = shape.podSquare;
     s.w *= shape.podWidth;
     s.y1 *= shape.podHeight;
     s.zo = (s.zo || 0) - shape.taper * Math.max(0, -s.x);
   }
   paintR.push(fullLoft(pod, 22, 0.50));
   blackR.push(sectionCap({ ...pod[0], x: 0.972 }, 22, 0.50, 1)); // radiator inlet
+  if (shape.kit === 'gills') {
+    paintR.push(plate([[-0.46, 0.89], [-0.64, 1.12], [-0.93, 1.11], [-1.04, 1.01],
+      [-1.09, 1.08], [-1.43, 1.04], [-1.52, 0.94], [-1.57, 1.00], [-2.05, 0.86], [-2.06, 0.65]], 0.008));
+    for (let k = 0; k < 5; k++) carbonR.push(wing([
+      { z: 0.30, x: 0.10 - 0.15 * k, y: 0.73 - k * 0.021, c: 0.13, a: 18 },
+      { z: 0.57, x: -0.07 - 0.15 * k, y: 0.72 - k * 0.022, c: 0.12, a: 18 },
+      { z: 0.70, x: -0.18 - 0.15 * k, y: 0.65 - k * 0.025, c: 0.10, a: 18 },
+    ]));
+  }
   // --- cockpit rim / headrest (U-shape around the helmet)
   {
     const pts = [[0.92, 0.655, 0.20], [0.70, 0.675, 0.255], [0.40, 0.70, 0.27], [0.15, 0.725, 0.235], [0.06, 0.74, 0.12], [0.045, 0.745, 0.0]].map((p) => new THREE.Vector3(...p));
