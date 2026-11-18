@@ -16,9 +16,14 @@ const gas = { ...idle, throttle: 1 };
 function raceWith(opts = {}) {
   return new Race(T, { mode: 'race', laps: 5, pits: 'off', grid: [{ isPlayer: true, team: 'Test' }], ...opts });
 }
-function runLights(r, input = idle) {
+function runLights(r) {
   r.start();
-  while (!r.racing) r.update(1 / 60, input);
+  while (!r.racing) r.update(1 / 60, idle);
+}
+function jumpOnFive(r) {
+  r.start();
+  while (r.lightsOn < 5) r.update(1 / 60, idle);
+  while (!r.racing) r.update(1 / 60, gas);
 }
 
 test('the first post-lights press launches a stationary car and records its reaction', () => {
@@ -44,9 +49,9 @@ test('a stationary pole sitter keeps the lead until a rival actually passes', ()
   assert.equal(r.player.pos, 2);
 });
 
-test('holding through lights-out earns one penalty and requires release and reapplication', () => {
+test('pressing on five reds and holding through lights-out earns one penalty and requires a fresh press', () => {
   const r = raceWith(), e = r.player;
-  runLights(r, gas);
+  jumpOnFive(r);
   for (let i = 0; i < 10; i++) r.update(1 / 30, gas);
   assert.equal(e.body.speed(), 0);
   assert.equal(e.driveThroughDue, 3);
@@ -58,10 +63,40 @@ test('holding through lights-out earns one penalty and requires release and reap
   assert.equal(e.driveThroughDue, 3);
 });
 
-test('a brief tap during the shared light sequence counts even between physics ticks', () => {
+test('presses on lights one through four are free, including a hold through lights-out', () => {
+  for (let light = 1; light <= 4; light++) {
+    const r = raceWith();
+    r.start();
+    while (r.lightsOn < light) r.update(1 / 60, idle);
+    while (!r.racing) r.update(1 / 60, gas);
+    r.update(1 / 60, gas);
+    assert.equal(r.player.driveThroughDue, 0);
+    assert.equal(r.player.body.speed(), 0);
+    r.update(1 / 60, idle);
+    r.update(1 / 60, gas);
+    assert.ok(r.player.body.speed() > 0);
+    assert.equal(r.player.driveThroughDue, 0);
+  }
+});
+
+test('a queued key press is judged against the lights visible at its timestamp', () => {
+  const r = raceWith();
+  runLights(r);
+  r.update(1 / 60, { ...idle, throttlePressed: true, fiveReds: false, reaction: -1.2 });
+  assert.equal(r.player.driveThroughDue, 0);
+  assert.equal(r.player.launchPending, true);
+  r.update(1 / 60, { ...idle, throttlePressed: true, fiveReds: true, reaction: -0.01 });
+  assert.equal(r.player.driveThroughDue, 3);
+  assert.equal(r.player.launchPending, true);
+});
+
+test('a brief tap counts only on five reds on the shared start clock', () => {
   const r = raceWith();
   r.startAt(0.1, 5.5);
-  while (r.state === 'grid') r.update(1 / 60, idle);
+  while (r.lightsOn < 4) r.update(1 / 60, idle);
+  r.update(0.001, { ...idle, throttlePressed: true });
+  assert.equal(r.player.driveThroughDue, 0);
+  while (r.lightsOn < 5) r.update(1 / 60, idle);
   r.update(0.001, { ...idle, throttlePressed: true });
   assert.equal(r.player.driveThroughDue, 3);
   while (!r.racing) r.update(1 / 60, idle);
@@ -71,7 +106,7 @@ test('a brief tap during the shared light sequence counts even between physics t
 
 test('an unserved drive-through is a DSQ, never a winner or a chequered flag for other cars', () => {
   const r = raceWith({ grid: [{ isPlayer: true }, { remote: true }] });
-  runLights(r, gas);
+  jumpOnFive(r);
   const e = r.player;
   e.lap = 3; e.idx = 0; e.s = 0;
   r.timing(e, T.N - 1, T.length - 1);
@@ -88,7 +123,7 @@ test('an unserved drive-through is a DSQ, never a winner or a chequered flag for
 
 test('a final-lap drive-through follows the lane to exit and counts without tyre service', () => {
   const r = raceWith({ laps: 1 }), e = r.player, P = T.pit;
-  runLights(r, gas);
+  jumpOnFive(r);
   assert.equal(e.driveThroughDue, 1);
   r.update(1 / 60, idle); r.update(1 / 60, gas);
   const entry = P.e0 + 4;
@@ -109,7 +144,7 @@ test('a final-lap drive-through follows the lane to exit and counts without tyre
 
 test('flashback restores a pending penalty and time trial keeps its rolling start', () => {
   const r = raceWith();
-  runLights(r, gas);
+  jumpOnFive(r);
   const snap = takeSnapshot(r);
   r.player.driveThroughDue = 0;
   restoreSnapshot(r, snap);

@@ -254,7 +254,7 @@ export class HUD {
     if (race.state === 'lights' || (race.racing && player.launchPending && !player.autopilot)) {
       sl.style.display = 'flex';
       $('launchHint').textContent = race.state === 'lights'
-        ? (player.driveThroughDue ? 'False start · release the throttle' : 'Keep the throttle released')
+        ? (player.driveThroughDue ? 'False start · release the throttle' : race.lightsOn === 5 ? 'Five reds · wait for lights out' : 'Launch on lights out')
         : (player.launchHeld ? 'Release the throttle, then press to launch' : `Lights out · press ${bindings.text('throttle')} or the throttle trigger`);
       sl.querySelectorAll('div').forEach((d, k) => d.classList.toggle('on', race.state === 'lights' && k < race.lightsOn));
     } else sl.style.display = 'none';

@@ -77,8 +77,8 @@ const PAGES = [
     body: `
       <p><b>Grid position.</b> Choose Random to draw a starting spot or Custom to pick a position from P1 to the back of your field.</p>
       <div class="tlights"><i></i><i></i><i></i><i></i><i></i></div>
-      <p><b>The start.</b> Five red lights come on one by one. Keep the throttle released. When all five go <b>out</b>, press your accelerator key or squeeze the trigger.
-      An early press earns a drive-through. Release and press again to launch, then follow the pit-entry arrows by the end of lap three (or the final lap on a shorter race).
+      <p><b>The start.</b> Five red lights come on one by one. When all five go <b>out</b>, press your accelerator key or squeeze the trigger.
+      Pressing while all five reds are lit earns a drive-through. Earlier presses are free. If you held the throttle, release and press again after lights-out to launch. To serve a penalty, follow the pit-entry arrows by the end of lap three (or the final lap on a shorter race).
       Missing the deadline disqualifies you. A drive-through clears at pit exit and tyre service takes a separate visit.
       Turn 1 on the opening lap is crowded: brake earlier than usual and leave room.</p>
       <p class="tnote">The mirror at the top of the screen shows who is right behind you. Finish in the top three and you are on the podium.</p>`,

@@ -425,12 +425,13 @@ export class Race {
     const raw = input.rawThrottle ?? input.throttle;
     const down = raw > (e.launchHeld ? 0.06 : 0.14);
     const pressed = input.throttlePressed || (down && !e.launchHeld);
-    if ((this.state === 'lights' && (down || pressed)) || (pressed && input.reaction != null && input.reaction < 0)) {
+    const fiveReds = input.fiveReds ?? (this.state === 'lights' && this.lightsOn === 5);
+    if (pressed && fiveReds) {
       if (!e.driveThroughDue) {
         e.driveThroughDue = Math.min(3, this.laps);
         this.events.push({ t: this.time, type: 'pen', text: 'FALSE START · DRIVE-THROUGH' });
       }
-    } else if (this.racing && pressed) {
+    } else if (this.racing && pressed && (input.reaction ?? 0) >= 0) {
       e.launchPending = false;
       e.reaction = Math.max(0, input.reaction ?? (this.time + this.acc - this.raceStart));
       this.events.push({ t: this.time, type: 'go', text: `REACTION ${Math.round(e.reaction * 1000)} ms` });

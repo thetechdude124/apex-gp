@@ -260,7 +260,7 @@ onResize();
 // ---------------------------------------------------------------- input
 const keys = new Set();
 const pressed = new Set();
-let greenShownAt = null, throttleEdgeAt = null, pauseLaunchAt = null;
+let fifthLightShownAt = null, greenShownAt = null, throttleEdgeAt = null, pauseLaunchAt = null;
 addEventListener('keydown', (e) => {
   const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') && e.target.type !== 'range';
   if (options.isOpen) {
@@ -327,7 +327,8 @@ function readInput(dt, v) {
   const throttlePressed = bindings.hit('throttle', pressed);
   const edge = throttlePressed && throttleEdgeAt != null ? throttleEdgeAt : performance.now();
   const reaction = greenShownAt == null ? null : (edge - greenShownAt) / 1000;
-  return { ...out, rawThrottle, throttlePressed, reaction, drs, ers, shiftUp: up, shiftDown: down };
+  const fiveReds = fifthLightShownAt != null && edge >= fifthLightShownAt && (greenShownAt == null || edge < greenShownAt);
+  return { ...out, rawThrottle, throttlePressed, fiveReds, reaction, drs, ers, shiftUp: up, shiftDown: down };
 }
 
 // ---------------------------------------------------------------- state
@@ -706,7 +707,7 @@ function qualiUpdate() {
 }
 
 function startSession(s) {
-  settings = s; greenShownAt = throttleEdgeAt = pauseLaunchAt = null;
+  settings = s; fifthLightShownAt = greenShownAt = throttleEdgeAt = pauseLaunchAt = null;
   inputFilter.speed = s.steerSpeed || 1;
   inputFilter.wheel = inputFilter.throttle = inputFilter.brake = 0;
   quality = QUALITY[s.quality] || QUALITY.high;
@@ -1228,6 +1229,7 @@ function frame(now) {
     for (const g of sideGlass) g.mesh.visible = true;
   }
   composer.render();
+  if (fifthLightShownAt == null && race.state === 'lights' && race.lightsOn === 5) fifthLightShownAt = performance.now();
   if (greenShownAt == null && race.mode === 'race' && race.racing && race.player.launchPending) greenShownAt = performance.now();
   if (showMirror) mirror.draw(mirrorRect.x, mirrorRect.y, mirrorRect.w, mirrorRect.h, innerWidth, innerHeight);
   pressed.clear(); padFlash = false;
