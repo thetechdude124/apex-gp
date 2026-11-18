@@ -5,6 +5,8 @@
 // Everything is built for the car's right-hand side (z >= 0) and mirrored, so the livery
 // texture (projected from the side) reads correctly on both flanks.
 import * as THREE from 'three';
+import { sportsShell } from './sportscar.js';
+import { VEHICLES } from '../sim/vehicles.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // fictional technical partners for the small decals (never another team's name)
@@ -258,9 +260,15 @@ function mirrored(g, shiftUV) {
 }
 
 // ------------------------------------------------------------------ shared geometry (built once)
-let GEO = null, GEO_intake = null, GEO_halo = null;
-function buildGeometry() {
-  if (GEO) return GEO;
+const formulaGeometry = new Map();
+const FORMULA = {
+  f1: { noseWidth: 1, podWidth: 1, podHeight: 1, taper: 0, sweep: 0.30, fin: 1 },
+  f2: { noseWidth: 1.35, podWidth: 1.14, podHeight: 1.10, taper: 0.065, sweep: 0.19, fin: 0.79 },
+};
+function buildGeometry(vehicle) {
+  if (formulaGeometry.has(vehicle)) return formulaGeometry.get(vehicle);
+  const shape = FORMULA[vehicle];
+  let intake, halo;
   const paintR = [], carbonR = [], carbonC = [], blackR = [], chromeR = [];
 
   // --- nose + monocoque + gearbox (central, half loft)
@@ -283,6 +291,7 @@ function buildGeometry() {
     { x: -2.25, w: 0.075, y0: 0.255, y1: 0.405, n: 2.2 },
     { x: -2.38, w: 0.045, y0: 0.290, y1: 0.375, n: 2.2 },
   ];
+  for (const s of mono) s.w *= 1 + (shape.noseWidth - 1) * THREE.MathUtils.smoothstep(s.x, 1.15, 2.95);
   paintR.push(halfLoft(mono, 14));
   // cockpit opening: a dark panel that hugs the top of the tub around the driver
   {
@@ -318,7 +327,8 @@ function buildGeometry() {
     { x: -2.22, w: 0.015, y0: 0.410, y1: 0.500, n: 2.2 },
   ], 12));
   // shark fin (thin, on the centreline: built whole and kept un-mirrored via carbonC? it's paint -> use half thickness)
-  paintR.push(plate([[-0.75, 0.90], [-1.15, 0.80], [-1.95, 0.585], [-2.12, 0.60], [-2.12, 0.74], [-1.5, 0.93], [-0.95, 0.972]], 0.004, 0.008));
+  const fin = plate([[-0.75, 0.90], [-1.15, 0.80], [-1.95, 0.585], [-2.12, 0.60], [-2.12, 0.74], [-1.5, 0.93], [-0.95, 0.972]], 0.004, 0.008);
+  paintR.push(fin.translate(0, -0.53, 0).scale(1, shape.fin, 1).translate(0, 0.53, 0));
   // --- sidepod: high inlet, undercut, downwash ramp to the floor
   const pod = [
     { x: 0.98, w: 0.150, y0: 0.330, y1: 0.585, n: 3.2, zo: 0.02 },
@@ -331,6 +341,11 @@ function buildGeometry() {
     { x: -1.85, w: 0.075, y0: 0.080, y1: 0.170, n: 2.2, zo: -0.15 },
     { x: -2.05, w: 0.030, y0: 0.080, y1: 0.120, n: 2.2, zo: -0.18 },
   ];
+  for (const s of pod) {
+    s.w *= shape.podWidth;
+    s.y1 *= shape.podHeight;
+    s.zo = (s.zo || 0) - shape.taper * Math.max(0, -s.x);
+  }
   paintR.push(fullLoft(pod, 22, 0.50));
   blackR.push(sectionCap({ ...pod[0], x: 0.972 }, 22, 0.50, 1)); // radiator inlet
   // --- cockpit rim / headrest (U-shape around the helmet)
@@ -343,11 +358,11 @@ function buildGeometry() {
   const span = [0, 0.14, 0.30, 0.50, 0.70, 0.86, 0.955];
   const fw = (dx, dy, chord, aoa, inboard = 0) => wing(span.filter((z) => z >= inboard).map((z) => {
     const q = z / 0.955;
-    return { z, x: 3.34 - 0.30 * Math.pow(q, 1.7) - dx, y: 0.072 + 0.018 * q * q + dy * (1 - 0.25 * q), c: chord * (1 - 0.22 * q), a: aoa * (1 - 0.35 * q), t: 0.09 };
+    return { z, x: 3.34 - shape.sweep * Math.pow(q, 1.7) - dx, y: 0.072 + 0.018 * q * q + dy * (1 - 0.25 * q), c: chord * (1 - 0.22 * q), a: aoa * (1 - 0.35 * q), t: 0.09 };
   }));
   carbonR.push(fw(0, 0, 0.27, 2));
   carbonR.push(fw(0.215, 0.040, 0.20, 9));
-  carbonR.push(fw(0.375, 0.090, 0.17, 17, 0.14));
+  if (vehicle !== 'f2') carbonR.push(fw(0.375, 0.090, 0.17, 17, 0.14));
   paintR.push(slot(fw(0.515, 0.150, 0.15, 26, 0.14), 'T')); // top flap in team colours
   { const o = [[2.52, 0.045], [3.04, 0.045], [3.03, 0.11], [2.90, 0.29], [2.52, 0.335]]; carbonR.push(plate(o, 0.968, 0.012)); paintR.push(slot(skin(o, 0.9745), 'F')); }
   carbonR.push(box(0.5, 0.012, 0.09, 2.78, 0.046, 0.93)); // footplate
@@ -399,10 +414,10 @@ function buildGeometry() {
     const t = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, 0.03, 10);
     // the halo is its own mesh so it can be faded out of the cockpit view
     const hr = finalize(t);
-    GEO_halo = mergeGeometries([hr, mirrored(hr, false), finalize(arm([1.02, 0.635, 0], [0.70, 0.865, 0], 0.06, 0.035))]);
+    halo = mergeGeometries([hr, mirrored(hr, false), finalize(arm([1.02, 0.635, 0], [0.70, 0.865, 0], 0.06, 0.035))]);
   }
   // --- airbox intake + T-cam + antenna + rain light housing
-  { const g = new THREE.CircleGeometry(1, 20); g.scale(0.07, 0.115, 1); g.rotateY(Math.PI / 2); g.translate(0.052, 0.80, 0); GEO_intake = g; }
+  { const g = new THREE.CircleGeometry(1, 20); g.scale(0.07, 0.115, 1); g.rotateY(Math.PI / 2); g.translate(0.052, 0.80, 0); intake = g; }
   carbonC.push(box(0.11, 0.05, 0.26, -0.16, 0.995, 0));
   carbonC.push(arm([1.55, 0.54, 0], [1.52, 0.66, 0], 0.012, 0.012));
   carbonC.push(box(0.06, 0.09, 0.14, -2.40, 0.335, 0));
@@ -412,13 +427,27 @@ function buildGeometry() {
   const cR = carbonR.map(finalize);
   const carbon = mergeGeometries([...cR, ...cR.map((g) => mirrored(g, false)), ...carbonC.map(finalize)]);
   const bR = blackR.map(finalize);
-  const black = mergeGeometries([...bR, ...bR.map((g) => mirrored(g, false)), finalize(GEO_intake)]);
+  const black = mergeGeometries([...bR, ...bR.map((g) => mirrored(g, false)), finalize(intake)]);
   const chR = chromeR.map(finalize);
   const chrome = mergeGeometries([...chR, ...chR.map((g) => mirrored(g, false))]);
 
   // DRS flap, pivoting about its trailing edge at (-2.585, 1.005)
   const flap = wing([-0.505, -0.47, -0.3, -0.1, 0.1, 0.3, 0.47, 0.505].map((z) => ({ z, x: 0.185, y: -0.105, c: 0.215, a: 30, t: 0.1 })), 6, 0.08);
 
+  const flapG = finalize(flap);
+  {
+    flapG.computeBoundingBox();
+    const b = flapG.boundingBox, fp = flapG.attributes.position, fuv = flapG.attributes.uv;
+    for (let i = 0; i < fp.count; i++) fuv.setXY(i, (fp.getZ(i) - b.min.z) / (b.max.z - b.min.z), (fp.getY(i) - b.min.y) / (b.max.y - b.min.y));
+  }
+  const geometry = { paint: paintAll, carbon, black, chrome, flap: flapG, halo };
+  formulaGeometry.set(vehicle, geometry);
+  return geometry;
+}
+
+let runningGear;
+function wheelGeometry() {
+  if (runningGear) return runningGear;
   // tyres
   const tyre = (w) => {
     const pts = [], R = WHEEL_R, rIn = 0.232, h = w / 2, rr = 0.05;
@@ -428,17 +457,31 @@ function buildGeometry() {
     for (let k = 0; k <= 7; k++) { const a = (k / 7) * (Math.PI / 2); pts.push(new THREE.Vector2(R - rr + Math.cos(a) * rr, h - rr + Math.sin(a) * rr)); }
     pts.push(new THREE.Vector2(rIn, h));
     const g = new THREE.LatheGeometry(pts, 44);
+    // The working surface is scuffed grey, the shoulders retain darker rubber.
+    const p = g.attributes.position, colors = [];
+    for (let i = 0; i < p.count; i++) {
+      const edge = Math.abs(p.getY(i)) / h;
+      const grain = 0.035 * Math.sin(p.getX(i) * 191 + p.getZ(i) * 79);
+      const shade = 0.43 + 0.42 * (1 - edge ** 3) + grain;
+      colors.push(shade, shade * 0.98, shade);
+    }
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     g.rotateX(Math.PI / 2);
     return g;
   };
-  const flapG = finalize(flap);
-  {
-    flapG.computeBoundingBox();
-    const b = flapG.boundingBox, fp = flapG.attributes.position, fuv = flapG.attributes.uv;
-    for (let i = 0; i < fp.count; i++) fuv.setXY(i, (fp.getZ(i) - b.min.z) / (b.max.z - b.min.z), (fp.getY(i) - b.min.y) / (b.max.y - b.min.y));
+  const spokes = [];
+  for (let k = 0; k < 10; k++) {
+    const bar = new THREE.BoxGeometry(0.20, 0.018, 0.018).rotateZ(0.12).translate(0.125, 0, 0);
+    spokes.push(finalize(bar.rotateZ(k * Math.PI / 5)));
   }
-  GEO = {
-    paint: paintAll, carbon, black, chrome, flap: flapG, halo: GEO_halo,
+  spokes.push(finalize(new THREE.CylinderGeometry(0.049, 0.052, 0.035, 12).rotateX(Math.PI / 2)));
+  runningGear = {
+    spokes: mergeGeometries(spokes),
+    wheelBody: new THREE.BoxGeometry(0.03, 0.115, 0.25),
+    grip: new THREE.CapsuleGeometry(0.02, 0.09, 4, 8),
+    glove: new THREE.SphereGeometry(0.038, 10, 8),
+    display: new THREE.PlaneGeometry(0.105, 0.055),
+    rainLight: new THREE.BoxGeometry(0.02, 0.07, 0.1),
     mirrorGlass: new THREE.PlaneGeometry(0.165, 0.062),
     tyreF: tyre(FRONT_W), tyreR: tyre(REAR_W),
     cover: new THREE.CircleGeometry(0.236, 36),
@@ -448,7 +491,7 @@ function buildGeometry() {
     helmet: new THREE.SphereGeometry(0.135, 28, 20),
     blob: new THREE.PlaneGeometry(6.6, 2.9),
   };
-  return GEO;
+  return runningGear;
 }
 // ------------------------------------------------------------------ textures
 function cnv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; }
@@ -995,7 +1038,7 @@ function shared() {
     carbon: new THREE.MeshPhysicalMaterial({ color: 0x1b1c20, roughness: 0.4, metalness: 0.25, clearcoat: 0.8, clearcoatRoughness: 0.18, envMapIntensity: 1.2 }),
     black: new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.85 }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xc4ccd6, roughness: 0.05, metalness: 1, envMapIntensity: 1.4 }),
-    tyre: new THREE.MeshStandardMaterial({ color: 0x0d0d0e, roughness: 0.78 }),
+    tyre: new THREE.MeshStandardMaterial({ color: 0x37363a, roughness: 0.80, vertexColors: true }),
     lip: new THREE.MeshStandardMaterial({ color: 0x70757d, roughness: 0.3, metalness: 0.9 }),
     glove: new THREE.MeshStandardMaterial({ color: 0x1a1a1e, roughness: 0.8 }),
     wheelBody: new THREE.MeshStandardMaterial({ color: 0x101114, roughness: 0.5, metalness: 0.4 }),
@@ -1013,25 +1056,75 @@ function sidewallMat(color) {
   return S.sidewall[color];
 }
 
-// ------------------------------------------------------------------ assemble a car
-export function buildCar(team, number, compoundColor = '#ffd400') {
-  const G = buildGeometry(), S = shared();
-  const L = liveryOf(team);
-  const group = new THREE.Group();
-  const own = []; // per-car resources to dispose
+// Far cars retain their painted body and silhouette. Batch the tyres, glazing and
+// aero into a second draw, without rendering four brake assemblies, the dash or decals.
+const farGeometry = new Map();
+const farMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.57 });
+function makeFarCar(vehicle, bodyGeo, paint, axles, own) {
+  if (!farGeometry.has(vehicle)) {
+    const parts = [];
+    const add = (g, color) => {
+      const part = g.index ? g.toNonIndexed() : g.clone();
+      part.deleteAttribute('uv');
+      const c = new THREE.Color(color), rgb = new Float32Array(part.attributes.position.count * 3);
+      for (let i = 0; i < rgb.length; i += 3) { rgb[i] = c.r; rgb[i + 1] = c.g; rgb[i + 2] = c.b; }
+      part.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+      parts.push(part);
+    };
+    add(bodyGeo.carbon, 0x222428);
+    if (bodyGeo.glass) {
+      add(bodyGeo.glass, 0x304454); add(bodyGeo.lamps, 0xf3f8ff); add(bodyGeo.rear, 0xb81a20);
+    } else {
+      add(bodyGeo.halo, 0x222428);
+      add(bodyGeo.flap.clone().translate(-2.585, 1.005, 0), 0x303239);
+      add(new THREE.SphereGeometry(0.14, 10, 6).translate(0.3, 0.805, 0), 0xb0a9a0);
+    }
+    for (const [i, ax] of axles.entries()) for (const side of [-1, 1]) {
+      const tyre = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, i ? REAR_W : FRONT_W, 16);
+      add(tyre.rotateX(Math.PI / 2).translate(ax, WHEEL_R, side * (i ? REAR_Z : FRONT_Z)), 0x28272a);
+    }
+    farGeometry.set(vehicle, mergeGeometries(parts));
+  }
+  const far = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ map: paint.map, color: paint.color, roughness: 0.5 });
+  own.push(mat);
+  far.add(new THREE.Mesh(bodyGeo.paint, mat), new THREE.Mesh(farGeometry.get(vehicle), farMaterial));
+  for (const part of far.children) part.castShadow = part.receiveShadow = true;
+  return far;
+}
 
-  const livery = liveryTexture(team); // shared with the team mate
-  const paint = new THREE.MeshPhysicalMaterial({ map: livery.tex, ...(FINISH[L.finish] || FINISH.gloss) });
-  own.push({ dispose: () => livery.release() }, paint);
+// ------------------------------------------------------------------ assemble a car
+export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1', lodDistance = 0) {
+  const closed = VEHICLES[vehicle].classId === 'gt3' || vehicle === 'hybrid';
+  const G = wheelGeometry(), S = shared(), L = liveryOf(team);
+  const group = new THREE.Group(), own = [];
   const add = (geo, mat, cast = true) => { const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; group.add(m); return m; };
-  add(G.paint, paint);
-  add(G.carbon, S.carbon);
-  add(G.black, S.black, false);
-  add(G.chrome, S.chrome, false);
-  const halo = add(G.halo, S.carbon);
+  const sport = closed ? sportsShell(vehicle) : null;
+  const bodyGeo = closed ? sport.geometry : buildGeometry(vehicle);
+  const paint = new THREE.MeshPhysicalMaterial(FINISH[L.finish] || FINISH.gloss);
+  own.push(paint);
+  let halo = null;
+  if (closed) {
+    paint.color.set(team.color);
+    const accent = new THREE.MeshStandardMaterial({ color: team.color2, roughness: 0.34, metalness: 0.24 });
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0x253342, metalness: 0.42, roughness: 0.14, clearcoat: 1 });
+    const lamp = new THREE.MeshStandardMaterial({ color: 0xf0f5ff, emissive: 0xcce4ff, emissiveIntensity: 2.2, roughness: 0.2 });
+    own.push(accent, glass, lamp);
+    add(bodyGeo.trim, accent); add(bodyGeo.glass, glass); add(bodyGeo.lamps, lamp, false);
+  } else {
+    const livery = liveryTexture(team);
+    paint.map = livery.tex; own.push({ dispose: livery.release });
+    add(bodyGeo.black, S.black, false); add(bodyGeo.chrome, S.chrome, false);
+    halo = add(bodyGeo.halo, S.carbon);
+    if (vehicle === 'f2') group.scale.set(0.87, 1.02, 0.96);
+  }
+  add(bodyGeo.paint, paint);
+  add(bodyGeo.carbon, S.carbon);
   const mirrors = [1, -1].map((side) => {
     const m = new THREE.Mesh(G.mirrorGlass, S.chrome);
-    m.rotation.y = -Math.PI / 2; m.position.set(0.9885, 0.735, side * 0.63);
+    m.rotation.y = -Math.PI / 2;
+    if (closed) m.position.set(sport.mirrorX, sport.mirrorY, side * 0.95);
+    else m.position.set(0.9885, 0.735, side * 0.63);
     group.add(m);
     return { mesh: m, side };
   });
@@ -1044,14 +1137,16 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
   group.add(blob);
 
   // DRS flap
-  const flapPivot = new THREE.Group();
-  flapPivot.position.set(-2.585, 1.005, 0);
-  const flapTex = flapTexture(team);
-  const flapMat = new THREE.MeshPhysicalMaterial({ map: flapTex, ...(FINISH[L.finish] || FINISH.gloss) });
-  own.push(flapTex, flapMat);
-  const flap = new THREE.Mesh(G.flap, flapMat); flap.castShadow = true;
-  flapPivot.add(flap);
-  group.add(flapPivot);
+  const flapPivot = closed ? null : new THREE.Group();
+  if (flapPivot) {
+    flapPivot.position.set(-2.585, 1.005, 0);
+    const flapTex = flapTexture(team);
+    const flapMat = new THREE.MeshPhysicalMaterial({ map: flapTex, ...(FINISH[L.finish] || FINISH.gloss) });
+    own.push(flapTex, flapMat);
+    const flap = new THREE.Mesh(bodyGeo.flap, flapMat); flap.castShadow = true;
+    flapPivot.add(flap);
+    group.add(flapPivot);
+  }
 
   // race number: on the engine-cover fin (both sides) and on top of the nose
   {
@@ -1063,9 +1158,12 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
     own.push(pg);
     for (const s of [1, -1]) {
       const n = new THREE.Mesh(pg, finMat);
-      n.position.set(-1.66, 0.81, s * 0.0135);
+      if (closed) {
+        const [x, y, z] = sport.door;
+        n.position.set(x, y, s * z);
+      } else n.position.set(-1.66, 0.81, s * 0.0135);
       n.rotation.set(0, s > 0 ? 0 : Math.PI, 0);
-      n.scale.set(0.95, 0.72, 1);
+      n.scale.set(closed ? 1.7 : 0.95, closed ? 1.7 : 0.72, 1);
       group.add(n);
     }
     const nn = new THREE.Mesh(pg, noseMat);
@@ -1074,9 +1172,9 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
     nn.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, new THREE.Vector3().crossVectors(right, up)));
     nn.position.set(2.32, 0.4065, 0);
     nn.scale.set(0.8, 0.8, 1);
-    group.add(nn);
+    if (!closed) group.add(nn);
     // on-board camera pod: the team's second car carries a yellow one so the two can be told apart
-    if (team.drivers && team.drivers[1] && team.drivers[1][2] === number) {
+    if (!closed && team.drivers && team.drivers[1] && team.drivers[1][2] === number) {
       const camMat = new THREE.MeshStandardMaterial({ color: 0xf2e21c, roughness: 0.45 });
       const cg = new THREE.BoxGeometry(0.114, 0.054, 0.264);
       own.push(camMat, cg);
@@ -1093,39 +1191,41 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
   own.push(hTex, hMat);
   const helmet = new THREE.Mesh(G.helmet, hMat);
   helmet.scale.set(1.12, 1.0, 0.94);
-  helmet.position.set(0.30, 0.805, 0);
+  if (closed) helmet.position.set(sport.eye[0] - 0.045, sport.eye[1] - 0.025, sport.eye[2]); else helmet.position.set(0.30, 0.805, 0);
   helmet.castShadow = true;
   driver.add(helmet);
   group.add(driver);
 
   // steering wheel (rotates with the front wheels)
   const sw = new THREE.Group();
-  sw.position.set(0.74, 0.665, 0);
+  if (closed) sw.position.set(sport.eye[0] + 0.42, sport.eye[1] - 0.235, sport.eye[2]); else sw.position.set(0.74, 0.665, 0);
   const swTilt = new THREE.Group(); swTilt.rotation.z = -0.2; sw.add(swTilt); // top of the wheel leans away: the display faces the driver's eyes
   const swSpin = new THREE.Group(); swTilt.add(swSpin);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.115, 0.25), S.wheelBody); swSpin.add(body);
+  const body = new THREE.Mesh(G.wheelBody, S.wheelBody); swSpin.add(body);
   for (const s of [-1, 1]) {
-    const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.02, 0.09, 4, 8), S.wheelBody); grip.position.set(0, -0.005, s * 0.135); swSpin.add(grip);
-    const glove = new THREE.Mesh(new THREE.SphereGeometry(0.038, 10, 8), S.glove); glove.scale.set(1.5, 1, 0.9); glove.position.set(-0.03, 0.0, s * 0.14); swSpin.add(glove);
+    const grip = new THREE.Mesh(G.grip, S.wheelBody); grip.position.set(0, -0.005, s * 0.135); swSpin.add(grip);
+    const glove = new THREE.Mesh(G.glove, S.glove); glove.scale.set(1.5, 1, 0.9); glove.position.set(-0.03, 0.0, s * 0.14); swSpin.add(glove);
   }
-  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.105, 0.055), S.screen);
+  const scr = new THREE.Mesh(G.display, S.screen);
   scr.rotation.y = -Math.PI / 2; scr.position.set(-0.019, 0.012, 0); swSpin.add(scr);
   group.add(sw);
 
   // rain light
   const lightMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff1010, emissiveIntensity: 0.4 });
   own.push(lightMat);
-  const rl = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.1), lightMat);
-  rl.position.set(-2.435, 0.335, 0);
+  const rl = new THREE.Mesh(closed ? bodyGeo.rear : G.rainLight, lightMat);
+  if (!closed) rl.position.set(-2.435, 0.335, 0);
   group.add(rl);
 
   // wheels
-  const coverT = coverTexture(team.color2);
-  const coverMat = new THREE.MeshStandardMaterial({ map: coverT, roughness: 0.45, metalness: 0.6 });
-  own.push(coverT, coverMat);
+  const coverT = closed ? null : coverTexture(team.color2);
+  const coverMat = new THREE.MeshStandardMaterial({ map: coverT, color: closed ? 0x858b95 : 0xffffff, roughness: 0.45, metalness: 0.6 });
+  if (coverT) own.push(coverT);
+  own.push(coverMat);
   const wheels = [];
   const swMat = sidewallMat(compoundColor);
-  for (const [ax, az, width, front] of [[FRONT_X, FRONT_Z, FRONT_W, true], [REAR_X, REAR_Z, REAR_W, false]]) {
+  const axles = closed ? [VEHICLES[vehicle].params.a, -VEHICLES[vehicle].params.b] : [FRONT_X, REAR_X];
+  for (const [ax, az, width, front] of [[axles[0], FRONT_Z, FRONT_W, true], [axles[1], REAR_Z, REAR_W, false]]) {
     for (const side of [1, -1]) {
       const steer = new THREE.Group();
       steer.position.set(ax, WHEEL_R, side * az);
@@ -1141,7 +1241,7 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
         if (face < 0) ring.rotation.y = Math.PI;
         spin.add(ring); walls.push(ring);
       }
-      const cover = new THREE.Mesh(G.cover, coverMat);
+      const cover = new THREE.Mesh(closed ? G.spokes : G.cover, coverMat);
       cover.position.z = side * (width / 2 - 0.012);
       if (side < 0) cover.rotation.y = Math.PI;
       spin.add(cover);
@@ -1155,14 +1255,22 @@ export function buildCar(team, number, compoundColor = '#ffd400') {
       const discMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, emissive: 0xff5a10, emissiveIntensity: 0, roughness: 0.6, side: THREE.DoubleSide });
       own.push(discMat);
       const disc = new THREE.Mesh(G.disc, discMat);
-      disc.position.z = -side * (width / 2 - 0.028);
+      disc.position.z = (closed ? side : -side) * (width / 2 - 0.028);
       spin.add(disc);
       group.add(steer);
       wheels.push({ steer, spin, front, disc, walls });
     }
   }
 
+  if (lodDistance) {
+    const detail = new THREE.Group(), lod = new THREE.LOD();
+    detail.add(...group.children.slice());
+    lod.addLevel(detail, 0);
+    lod.addLevel(makeFarCar(vehicle, bodyGeo, paint, axles, own), lodDistance, 0.12);
+    group.add(lod);
+  }
   group.userData = {
+    eye: sport?.eye, roofHeight: sport?.roofHeight, vehicle,
     wheels, flapPivot, rearLight: rl, driver, helmet, steeringWheel: swSpin, blob, paint, halo, mirrors, screen: scr,
     dispose() { for (const o of own) o.dispose(); },
   };

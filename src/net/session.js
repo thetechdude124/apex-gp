@@ -6,10 +6,11 @@
 // host's machine also drives the AI cars. Thirty times a second every machine sends where its cars
 // are; everyone else shows them from that (Race.netState / Race.remoteStep). Lap times, pit stops
 // and the finish are reported by the car's owner twice a second (Race.netTiming).
+import { vehicleId, SETUPS } from '../sim/vehicles.js';
 import { hostRoom, joinRoom, newCode, cleanCode, supported } from './link.js';
 
 export { cleanCode, supported };
-export const PROTO = 1;   // players on different versions of the game cannot share a room
+export const PROTO = 2;   // players on different versions of the game cannot share a room
 export const MAX_PLAYERS = 12;
 const REC = 36;           // bytes per car in a position packet
 const CODES = ['S', 'M', 'H', 'W'];
@@ -25,7 +26,7 @@ export function cleanProfile(p) {
   const name = String(p.name || '').replace(/[^\p{L}\p{N} .'_-]/gu, '').trim().slice(0, 24) || 'Driver';
   const short = String(p.short || '').replace(/[^\p{L}\p{N}]/gu, '').slice(0, 3).toUpperCase() || name.slice(0, 3).toUpperCase();
   const car = p.car || {};
-  return { name, short, team: clamp(Math.round(num(p.team, 0)), 0, 9),
+  return { name, short, vehicle: vehicleId(p.vehicle), downforce: Object.hasOwn(SETUPS, p.downforce) ? p.downforce : 'balanced', team: clamp(Math.round(num(p.team, 0)), 0, 9),
     car: { custom: !!car.custom, color: hex(car.color, '#d01818'), color2: hex(car.color2, '#ffffff'), number: clamp(Math.round(num(car.number, 0)), 0, 99) } };
 }
 
@@ -352,7 +353,7 @@ export class Net {
       if (!e || !e.remote) continue;
       if (this.isHost && this.owner[i] !== from) continue;
       const rec = { i, ll: num(r.ll), bl: num(r.bl), st: clamp(num(r.st, 0), 0, 99), pn: clamp(num(r.pn, 0), 0, 999), pr: r.pr ? 1 : 0,
-        u: String(r.u || '').replace(/[^SMHW]/g, '').slice(0, 4), fa: num(r.fa), fl: num(r.fl, 0), fc: num(r.fc, 0), ns: r.ns ? 1 : 0, dnf: r.dnf ? 1 : 0 };
+        u: String(r.u || '').replace(/[^SMHW]/g, '').slice(0, 4), fa: num(r.fa), fl: num(r.fl, 0), fc: num(r.fc, 0), ns: r.ns ? 1 : 0, dsq: !!r.dsq, dt: clamp(Math.round(num(r.dt, 0)), 0, 3), dnf: r.dnf ? 1 : 0 };
       race.netTiming(e, rec);
       if (this.isHost) this.slow[i] = rec;
     }

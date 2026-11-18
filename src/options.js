@@ -1,5 +1,6 @@
 // Settings. The main menu shows only the essentials; everything else lives here, in the
 // Advanced overlay (race rules, assists, controls, view, car), and is remembered in this browser.
+import { DIFF_DEFAULT, diffPercent } from './sim/physics.js';
 import { prefs } from './prefs.js';
 import { bindings, ACTIONS } from './bindings.js';
 
@@ -11,14 +12,21 @@ const DEFAULTS = {
   // race
   opps: 19, pits: 'required', tyres: 'M', time: '', limits: 'on',
   // assists
-  tc: 'on', abs: 'on', stability: 'on', brakeAssist: 'off', line: 'on', drs: 'assist', ers: 'assist', gearbox: 'auto', steerSpeed: 100, rotation: 3,
+  tc: 'on', abs: 'on', stability: 'on', brakeAssist: 'off', line: 'on', drs: 'assist', ers: 'assist', gearbox: 'auto', steerSpeed: 100, diffOpen: DIFF_DEFAULT, downforce: 'balanced', vehicle: 'f1', fieldType: 'single',
   // view
   quality: 'high', mirror: 'on', halo: 'faded', map: 'full',
   // car
   livery: 'team', color: '#1f4fff', color2: '#ffd400', number: '',
 };
 export const cfg = {
-  get(k) { const v = prefs.get('cfg', {})[k]; return v === undefined ? DEFAULTS[k] : v; },
+  get(k) {
+    const saved = prefs.get('cfg', {});
+    if (k === 'diffOpen') {
+      // A new key distinguishes a saved 1% from level 1 in an older checkout.
+      return diffPercent(saved.diffOpen ?? ((saved.rotation ?? 3) - 1) * 25);
+    }
+    return saved[k] ?? DEFAULTS[k];
+  },
   set(k, v) { prefs.set('cfg', { ...prefs.get('cfg', {}), [k]: v }); },
   reset(keys) { const c = { ...prefs.get('cfg', {}) }; for (const k of keys) delete c[k]; prefs.set('cfg', c); },
 };
@@ -48,7 +56,7 @@ const ROWS = [
   ['assists', 'drs', 'DRS', 'seg', [['assist', 'ASSIST (OPENS ITSELF)'], ['manual', 'MANUAL']]],
   ['assists', 'ers', 'ERS battery', 'seg', [['assist', 'ASSIST (AUTOMATIC)'], ['manual', 'MANUAL']], 'The overtake button gives full boost anywhere, in both modes.'],
   ['assists', 'gearbox', 'Gearbox', 'seg', [['auto', 'AUTOMATIC'], ['manual', 'MANUAL']]],
-  ['assists', 'rotation', 'Differential', 'seg', [[1, '1 STABLE'], [2, '2'], [3, '3'], [4, '4'], [5, '5 LOOSE']], 'How readily the car rotates off the throttle and steps out on power.'],
+  ['assists', 'diffOpen', 'Differential openness', 'range', [0, 100, 1, '%'], '0% keeps the rear stable on entry. 100% allows the most rotation.'],
   ['assists', 'steerSpeed', 'Steering speed', 'range', [60, 160, 5, '%']],
   ['view', 'quality', 'Graphics', 'seg', [['low', 'LOW'], ['med', 'MEDIUM'], ['high', 'ULTRA']]],
   ['view', 'mirror', 'Rear-view mirror strip', 'seg', ONOFF],
@@ -121,7 +129,7 @@ export class Options {
     const row = ([, key, label, type, o, note]) => {
       const cur = cfg.get(key);
       const ctl = type === 'seg' ? seg(key, cur, o)
-        : `<div class="orange"><input type="range" min="${o[0]}" max="${o[1]}" step="${o[2]}" value="${cur}" data-key="${key}" data-unit="${o[3] || ''}"><b>${cur}${o[3] || ''}</b></div>`;
+        : `<div class="orange"><input type="range" aria-label="${label}" min="${o[0]}" max="${o[1]}" step="${o[2]}" value="${cur}" data-key="${key}" data-unit="${o[3] || ''}"><b>${cur}${o[3] || ''}</b></div>`;
       return `<div class="oset"><div class="olab">${label}${note ? `<small>${note}</small>` : ''}</div>${ctl}</div>`;
     };
     let body = '';

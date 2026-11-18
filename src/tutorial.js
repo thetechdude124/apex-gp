@@ -61,7 +61,7 @@ const PAGES = [
         <div>${key('ESC', 'w')}<span>Pause: replay, options, this guide</span></div>
       </div>
       <p class="tnote">These are the defaults. Every key can be changed under Options · Controls, where you can also set the field of view for each camera, the cockpit halo and the track map style.</p>
-      <p class="tnote">A gamepad works too: triggers for pedals, left stick to steer, A for DRS, X for ERS, d-pad up to pit.</p>`,
+      <p class="tnote">A gamepad works too: triggers for pedals, left stick to steer, A for DRS, X for ERS, follow the arrows for pit entry.</p>`,
   },
   {
     title: 'Driving: follow the racing line',
@@ -80,14 +80,16 @@ const PAGES = [
       Stay inside the white lines: a lap with all four wheels off the track is deleted, and you get one more try.
       You can skip qualifying by choosing a fixed or random grid slot in the menu.</p>
       <div class="tlights"><i></i><i></i><i></i><i></i><i></i></div>
-      <p><b>The start.</b> Five red lights come on one by one. When they all go <b>out</b>, go. You cannot move before that, so hold the throttle and be ready.
+      <p><b>The start.</b> Five red lights come on one by one. Keep the throttle released. When all five go <b>out</b>, press your accelerator key or squeeze the trigger.
+      An early press earns a drive-through. Release and press again to launch, then follow the pit-entry arrows by the end of lap three (or the final lap on a shorter race).
+      Missing the deadline disqualifies you. A drive-through clears at pit exit and tyre service takes a separate visit.
       Turn 1 on the opening lap is crowded: brake earlier than usual and leave room.</p>
       <p class="tnote">The mirror at the top of the screen shows who is right behind you. Finish in the top three and you are on the podium.</p>`,
   },
   {
     title: 'DRS and ERS: how to overtake',
     body: `${drsSvg}
-      <p><b>DRS</b> opens a flap in the rear wing for more top speed. You get it when you cross a <b>detection line</b> less than
+      <p>F1 and F2 have <b>DRS</b>. It opens a flap in the rear wing for more top speed. You get it when you cross a <b>detection line</b> less than
       <b>one second</b> behind another car (from lap 2). The HUD then shows <b class="g">DRS READY</b>; when you reach the zone it flashes
       <b class="g">DRS AVAILABLE</b>: press ${key('SPACE', 'w')} once. It closes by itself when you brake.
       Boards beside the track and green "DRS" paint on the road mark each zone. In time trial you can use it every lap.</p>

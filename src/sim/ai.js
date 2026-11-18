@@ -46,8 +46,8 @@ export class AIDriver {
     // blend of the two for the grip the tyres have right now (compound x wear), so worn tyres mean
     // earlier braking and lower corner speeds without recomputing anything mid-race.
     [this.gLo, this.gHi] = G_RANGE[race.weatherPlan === 'raining' || race.weatherPlan === 'drying' ? 'mixed' : race.wet ? 'wet' : 'dry'];
-    this.profLo = race.profileFor(this.skill, this.brakeEffort, this.gLo);
-    this.profHi = race.profileFor(this.skill, this.brakeEffort, this.gHi);
+    this.profLo = race.profileFor(this.skill, this.brakeEffort, this.gLo, entry.body.p);
+    this.profHi = race.profileFor(this.skill, this.brakeEffort, this.gHi, entry.body.p);
     const n = race.T.N;
     this.prof = { I: { v: new Float32Array(n) }, L: { v: new Float32Array(n) }, R: { v: new Float32Array(n) } };
     this.gq = -1;
@@ -103,7 +103,7 @@ export class AIDriver {
     let behind = null, behindGap = 1e9, ahead = null, aheadGap = 1e9;
     const P = T.pit;
     for (const o of R.entries) {
-      if (o === e || o.ghost > 0) continue;
+      if (o === e || o.dsq || o.ghost > 0) continue;
       if (o.pit && o.pit.r < P.x0) continue; // in the pit lane, behind the wall
       let ds = o.s - e.s;
       if (ds > T.length / 2) ds -= T.length;
@@ -258,9 +258,13 @@ export class AIDriver {
     // ----- speed target from the blended profile, with braking look-ahead
     const look = Math.round((v * 0.16 + 3) / T.ds);
     let vt = this.vAt(this.u, (e.idx + look) % N);
+    const drsGain = body.drsOpen ? Math.cbrt(body.p.CdA / (body.p.CdA - body.p.drsCd)) : 1;
+    const straightAt = (j) => Math.abs(T.rl.kappa[j]) < 1 / 1000 && R.inDrsZone(j);
+    if (body.drsOpen && straightAt((e.idx + look) % N)) vt *= drsGain;
     for (let q = look; q < look + 70; q += 5) {
       const j = (e.idx + q) % N;
-      const allow = Math.sqrt(this.vAt(this.uTarget, j) ** 2 + 2 * 30 * Math.min(1, this.gq) * Math.max(0, q * T.ds - v * 0.25));
+      const cornerSpeed = this.vAt(this.uTarget, j) * (body.drsOpen && straightAt(j) ? drsGain : 1);
+      const allow = Math.sqrt(cornerSpeed ** 2 + 2 * 30 * Math.min(1, this.gq) * Math.max(0, q * T.ds - v * 0.25));
       if (allow < vt) vt = allow;
     }
     const kap = Math.abs(T.rl.kappa[(e.idx + look) % N]);

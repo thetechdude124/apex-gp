@@ -1,6 +1,7 @@
 // Race manager: physics substeps, track surfaces, walls, car-to-car contact,
 // slipstream/dirty air, DRS detection, laps/sectors/gaps, track limits, results.
-import { CarBody, CAR, SURF, SURF_WET, COMPOUNDS, PLAYER_SETUP, DIFF_DEFAULT, computeProfile, tyreGrip, warmGrip, WARM } from './physics.js';
+import { CarBody, CAR, SURF, SURF_WET, COMPOUNDS, diffPercent, computeProfile, tyreGrip, warmGrip, WARM } from './physics.js';
+import { VEHICLES, vehicleId, carParams } from './vehicles.js';
 import { project } from './trackgen.js';
 import { AIDriver, laneOf } from './ai.js';
 
@@ -61,15 +62,14 @@ export class Race {
 
     const n = opts.grid.length;
     opts.grid.forEach((g, k) => {
-      // The player's car has its own balance and a differential setting (setup.diff 1..5);
-      // the AI run the standard car with no differential effects.
-      const body = new CarBody(g.isPlayer ? { ...CAR, ...PLAYER_SETUP } : { ...CAR });
-      if (g.isPlayer) body.diff = Math.max(1, Math.min(5, Math.round(g.setup?.diff ?? D.diff ?? DIFF_DEFAULT)));
+      const vehicle = vehicleId(g.vehicle);
+      const body = new CarBody(carParams(vehicle, g.setup?.downforce, g.isPlayer || g.friend));
+      if (g.isPlayer) body.diff = diffPercent(g.setup?.diff ?? D.diff);
       body.compound = this.wet ? 'W' : (COMPOUNDS[g.compound] && g.compound !== 'W' ? g.compound : 'M');
       body.gripMul = COMPOUNDS[body.compound].mu;
       body.manual = !!g.manual;
       const e = {
-        id: k, name: g.name, short: g.short, team: g.team, color: g.color, color2: g.color2, number: g.number,
+        id: k, vehicle, classId: VEHICLES[vehicle].classId, name: g.name, short: g.short, team: g.team, color: g.color, color2: g.color2, number: g.number,
         isPlayer: !!g.isPlayer, body, ai: null,
         // online: a remote car is driven on someone else's machine; here it only follows the
         // positions that machine sends (see remoteStep)
@@ -83,7 +83,9 @@ export class Race {
         assists: g.assists ?? { tc: true, abs: true },
         lapTrace: null, bestTrace: null, retired: false, overtakes: 0,
         pit: null, pitReq: false, pitCompound: null, stops: 0, used: new Set([body.compound]), stintLap: 0,
-        drsNote: null,
+        drsNote: null, classPos: 1,
+        launchPending: !!g.isPlayer && this.mode === 'race', launchHeld: false, reaction: null,
+        driveThroughDue: 0, dsq: false,
       };
       if (!boxOf.has(g.team)) boxOf.set(g.team, boxOf.size % 10);
       e.box = boxOf.get(g.team);
@@ -98,6 +100,7 @@ export class Race {
         e.ai = new AIDriver(e, this, g);
       }
     });
+    this.mixed = new Set(this.entries.map((e) => e.classId)).size > 1;
     this.boxTeams = [...boxOf.keys()]; // team name per pit box, in pit-lane order
     if (this.mode === 'trial') { this.state = 'racing'; this.racing = true; }
     this.player = this.entries.find((e) => e.isPlayer) || null;
@@ -113,12 +116,12 @@ export class Race {
   }
 
   // grip: tyre state (compound x wear), so a driver on worn tyres brakes earlier and corners slower
-  profileFor(skill, brake = 1, grip = 1) {
+  profileFor(skill, brake = 1, grip = 1, p = this.player?.body.p ?? CAR) {
     const ks = Math.round(skill * 400) / 400, kb = Math.round(brake * 25) / 25, kg = Math.round(grip * 50) / 50;
-    const key = `${ks}:${kb}:${kg}`;
+    const key = `${p.profileKey}:${ks}:${kb}:${kg}`;
     if (!this.profiles.has(key)) {
       const T = this.T;
-      this.profiles.set(key, { I: computeProfile(T, T.rl, CAR, ks, kg, kb), L: computeProfile(T, T.lineL, CAR, ks, kg, kb), R: computeProfile(T, T.lineR, CAR, ks, kg, kb) });
+      this.profiles.set(key, { I: computeProfile(T, T.rl, p, ks, kg, kb), L: computeProfile(T, T.lineL, p, ks, kg, kb), R: computeProfile(T, T.lineR, p, ks, kg, kb) });
     }
     return this.profiles.get(key);
   }
@@ -128,7 +131,7 @@ export class Race {
   humanProfile(grip = 1) {
     const kg = Math.round(grip * 50) / 50;
     this._human = this._human || new Map();
-    if (!this._human.has(kg)) this._human.set(kg, computeProfile(this.T, this.T.rl, CAR, 0.93, kg, 0.6).v);
+    if (!this._human.has(kg)) this._human.set(kg, computeProfile(this.T, this.T.rl, this.player?.body.p ?? CAR, 0.93, kg, 0.6).v);
     return this._human.get(kg);
   }
 
@@ -200,6 +203,7 @@ export class Race {
 
   // called as a car starts lap e.lap: decide whether it comes in at the end of this lap
   strategy(e) {
+    if (e.driveThroughDue && (!e.isPlayer || e.autopilot)) { e.pitReq = true; return; }
     if (this.pitRule === 'off' || !this.racing || e.finishedAt != null) return;
     const left = this.laps - e.lap + 1; // laps still to run, including this one
     const w = e.body.tyreWear;
@@ -317,14 +321,15 @@ export class Race {
   // released at the end of the exit road.
   enterPit(e, r, dl) {
     const P = this.T.pit;
-    const stop = this.pitRule !== 'off' && this.mode === 'race' && e.finishedAt == null;
+    const driveThrough = e.driveThroughDue > 0;
+    const stop = !driveThrough && this.pitRule !== 'off' && this.mode === 'race' && e.finishedAt == null;
     let dur = 2.15 + Math.random() * 0.7;
     if (Math.random() < 0.07) dur += 1.2 + Math.random() * 2;     // slow stop
     if (!e.pitReq) dur += 2.5;                                     // crew was not expecting the car
     // Before a driver's pit window opens the new set is not ready: the stop still counts, but it
     // is slow. (Stopping on lap 1 into clear air while the field queues later is not a free win.)
     if (stop && e.stops === 0 && e.lap < e.plan.window[0] && !this.wrongTyres(e)) { dur += 3.5; if (e.isPlayer) this.events.push({ t: this.time, type: 'warn', text: 'EARLY STOP: TYRES NOT READY, SLOW STOP' }); }
-    e.pit = { phase: 'in', r, r0: r, off: dl - P.lat(r), blend: Math.max(12, Math.min(70, P.nose0 - 6 - r)), v: e.body.speed(),
+    e.pit = { phase: 'in', driveThrough, r, r0: r, off: dl - P.lat(r), blend: Math.max(12, Math.min(70, P.nose0 - 6 - r)), v: e.body.speed(),
       box: P.boxes[e.box], stop, serviced: !stop, stopT: 0, dur, t: 0, lat: dl, to: stop ? this.nextCompound(e) : null };
     e.drsAvail = false;
     if (e.isPlayer) this.events.push({ t: this.time, type: 'radio', text: 'PIT LANE: LIMITER ON' });
@@ -399,10 +404,36 @@ export class Race {
       e.pit = null; e.pitOutT = this.time;
       e.idx = A.i;
       if (e.ai) { e.ai.u = laneOf(T, P.side * lat, A.i); e.ai.uTarget = e.ai.u; }
-      if (e.isPlayer) { e.pitExit = true; this.events.push({ t: this.time, type: 'go', text: 'PIT EXIT' }); }
+      if (p.driveThrough) { e.driveThroughDue = 0; e.pitReq = false; }
+      if (e.isPlayer) {
+        e.pitExit = true;
+        this.events.push({ t: this.time, type: 'go', text: p.driveThrough ? 'DRIVE-THROUGH SERVED' : 'PIT EXIT' });
+      }
+      if (p.finishCross != null) this.finish(e, p.finishCross);
       return;
     }
     b.kinematic(A.x, A.y, psi, p.v, dt);
+  }
+
+  // Sample the raw pedal once per displayed frame, before advancing the lights. The smoothed
+  // driving input can remain positive after a release, especially on a keyboard.
+  readLaunch(input) {
+    const e = this.player;
+    if (!e?.launchPending || e.autopilot || this.state === 'grid') return;
+    const raw = input.rawThrottle ?? input.throttle;
+    const down = raw > (e.launchHeld ? 0.06 : 0.14);
+    const pressed = input.throttlePressed || (down && !e.launchHeld);
+    if ((this.state === 'lights' && (down || pressed)) || (pressed && input.reaction != null && input.reaction < 0)) {
+      if (!e.driveThroughDue) {
+        e.driveThroughDue = Math.min(3, this.laps);
+        this.events.push({ t: this.time, type: 'pen', text: 'FALSE START · DRIVE-THROUGH' });
+      }
+    } else if (this.racing && pressed) {
+      e.launchPending = false;
+      e.reaction = Math.max(0, input.reaction ?? (this.time + this.acc - this.raceStart));
+      this.events.push({ t: this.time, type: 'go', text: `REACTION ${Math.round(e.reaction * 1000)} ms` });
+    }
+    e.launchHeld = down;
   }
 
   // advance simulation by frame dt with player input
@@ -415,6 +446,7 @@ export class Race {
       if (lag > 0.4 || lag < -1) this.time += lag;
       else frameDt = Math.max(0, frameDt + Math.max(-0.004, Math.min(0.03, lag * 0.25)));
     }
+    this.readLaunch(playerInput);
     this.acc += frameDt;
     let steps = 0;
     // gear-shift presses are one-shot events: latch them and apply to exactly one substep
@@ -455,7 +487,7 @@ export class Race {
     for (const e of this.entries) {
       let slip = 0, dirty = 0;
       for (const o of this.entries) {
-        if (o === e) continue;
+        if (o === e || o.dsq) continue;
         let ds = o.s - e.s;
         if (ds < -T.length / 2) ds += T.length;
         if (ds > T.length / 2) ds -= T.length;
@@ -480,6 +512,7 @@ export class Race {
     for (const e of this.entries) {
       if (e.ghost > 0) e.ghost -= dt;
       const b = e.body;
+      if (e.dsq) continue;
       if (e.remote) { this.remoteStep(e, dt); continue; }
       // scripted phase: the pit lane
       if (e.pit) {
@@ -491,11 +524,13 @@ export class Race {
         this.timing(e, pI, pS);
         continue;
       }
+      if ((!this.racing && this.state !== 'finished') || (e.launchPending && !e.autopilot)) {
+        e.input = { ...IDLE, brake: 1, hold: true };
+        continue;
+      }
       let inp;
       if (e.isPlayer) {
         inp = playerInput;
-        // held on the grid until the lights go out
-        if (!this.racing && this.state !== 'finished') inp = { throttle: 0, brake: 1, steer: playerInput.steer, hold: true };
         if ((e.finishedAt != null || e.autopilot) && e.ai) inp = e.ai.control(dt);
       } else {
         inp = e.ai.control(dt);
@@ -503,7 +538,7 @@ export class Race {
       e.input = inp;
       // DRS state
       const inZone = this.inDrsZone(e.idx);
-      if (e.drsAvail && inZone && inp.drs && !b.drsOpen) b.drsOpen = true;
+      if (b.p.drsCd > 0 && e.drsAvail && inZone && inp.drs && !b.drsOpen) b.drsOpen = true;
       if (b.drsOpen && (!inZone || inp.brake > 0.05)) b.drsOpen = false;
 
       // surfaces per axle
@@ -602,10 +637,10 @@ export class Race {
     const L = this.T.length;
     for (let i = 0; i < es.length; i++) {
       const A = es[i];
-      if (A.ghost > 0 || A.pit) continue;
+      if (A.dsq || A.ghost > 0 || A.pit) continue;
       for (let j = i + 1; j < es.length; j++) {
         const B = es[j];
-        if (B.ghost > 0 || B.pit) continue;
+        if (B.dsq || B.ghost > 0 || B.pit) continue;
         let ds = Math.abs(A.s - B.s);
         if (ds > L / 2) ds = L - ds;
         if (ds > 7) continue;
@@ -629,11 +664,11 @@ export class Race {
           const vrel = (vbx - vax) * nx + (vby - vay) * ny;
           if (vrel < 0) {
             const raxn = rax * ny - ray * nx, rbxn = rbx * ny - rby * nx;
-            const m = a.p.mass, I = a.p.Iz * 1.6;
-            const J = (-(1 + 0.15) * vrel) / (2 / m + (raxn * raxn) / I + (rbxn * rbxn) / I);
-            avx -= (J * nx) / m; avy -= (J * ny) / m;
-            bvx += (J * nx) / m; bvy += (J * ny) / m;
-            a.r -= (raxn * J) / I; b.r += (rbxn * J) / I;
+            const ma = a.p.mass, mb = b.p.mass, ia = a.p.Iz * 1.6, ib = b.p.Iz * 1.6;
+            const J = (-(1 + 0.15) * vrel) / (1 / ma + 1 / mb + (raxn * raxn) / ia + (rbxn * rbxn) / ib);
+            avx -= (J * nx) / ma; avy -= (J * ny) / ma;
+            bvx += (J * nx) / mb; bvy += (J * ny) / mb;
+            a.r -= (raxn * J) / ia; b.r += (rbxn * J) / ib;
             a.vx = avx * ca + avy * sa; a.vy = -avx * sa + avy * ca;
             b.vx = bvx * cb + bvy * sb; b.vy = -bvx * sb + bvy * cb;
             const imp = -vrel;
@@ -675,10 +710,13 @@ export class Race {
       e.curSectors = [];
       e.lapValid = true;
       e.lapTrace = new Float32Array(Math.ceil(N / 10));
-      if (this.mode === 'race' && this.racing && e.finishedAt == null && (e.lap > this.laps || this.leaderFinished)) this.finish(e, tCross);
+      if (this.mode === 'race' && this.racing && e.finishedAt == null) {
+        if (e.lap > this.laps || this.leaderFinished) this.finish(e, tCross);
+        else if (e.driveThroughDue && e.lap > e.driveThroughDue && !e.pit?.driveThrough) this.disqualify(e, tCross);
+      }
       if (this.mode === 'race' && this.racing && e.lap === 2 && !this.drsEnabled) {
         this.drsEnabled = true;
-        this.events.push({ t: this.time, type: 'radio', text: 'DRS ENABLED' });
+        if (this.player?.body.p.drsCd) this.events.push({ t: this.time, type: 'radio', text: 'DRS ENABLED' });
       }
       if (e.finishedAt == null) this.strategy(e);
     }
@@ -692,7 +730,7 @@ export class Race {
       }
     }
     // DRS detection
-    for (const z of T.drs) {
+    if (e.body.p.drsCd) for (const z of T.drs) {
       if (prevIdx < z.detect && e.idx >= z.detect && e.idx - prevIdx < 50) {
         e.drsAvail = false;
         if (this.mode === 'trial') e.drsAvail = true;
@@ -720,8 +758,21 @@ export class Race {
     }
   }
 
+  disqualify(e, time) {
+    e.dsq = true;
+    e.finishedAt = time;
+    e.finLaps = e.lap - 1;
+    e.body.vx = e.body.vy = e.body.r = 0;
+    if (e.isPlayer) this.events.push({ t: time, type: 'pen', text: 'DISQUALIFIED · UNSERVED DRIVE-THROUGH' });
+  }
+
   // a car takes the chequered flag (tCross: the moment it crossed the line)
   finish(e, tCross) {
+    if (e.driveThroughDue) {
+      if (e.pit?.driveThrough) e.pit.finishCross = tCross;
+      else this.disqualify(e, tCross);
+      return;
+    }
     if (this.pitRule === 'required' && (e.stops === 0 || (e.used.size < 2 && !this.everWet))) { e.penalty += 20; e.noStop = true; }
     e.finLaps = e.lap - 1;
     e.finCross = tCross;
@@ -795,12 +846,14 @@ export class Race {
     // sides of the line for a moment
     const N = T.N;
     e.lap = n.lap + (n.idx > N * 0.8 && e.idx < N * 0.2 ? 1 : n.idx < N * 0.2 && e.idx > N * 0.8 ? -1 : 0);
+    if (this.racing && e.lap >= 2) this.drsEnabled = true;
     this.checkpoint(e, prevIdx);
     e.dist = e.lap * T.length + e.s;
   }
 
   // timing data for a remote car, from its owner (twice a second)
   netTiming(e, m) {
+    e.driveThroughDue = m.dt || 0;
     e.lastLap = m.ll; e.stops = m.st; e.penalty = m.pn; e.pitReq = !!m.pr; e.used = new Set(m.u || []);
     if (m.bl != null && (e.bestLap == null || m.bl < e.bestLap)) {
       e.bestLap = m.bl;
@@ -808,6 +861,8 @@ export class Race {
     }
     if (m.fa != null && e.finishedAt == null) {
       e.finishedAt = m.fa; e.finLaps = m.fl; e.finCross = m.fc; e.noStop = !!m.ns; e.dnf = !!m.dnf;
+      e.dsq = !!m.dsq;
+      if (e.dsq) return;
       this.finishOrder.push(e);
       this.finishOrder.sort((a, b) => (b.finLaps ?? 0) - (a.finLaps ?? 0) || a.finishedAt - b.finishedAt);
       if (!this.leaderFinished && !e.dnf) {
@@ -819,13 +874,14 @@ export class Race {
   }
   timingOf(e) {
     return { i: e.id, ll: e.lastLap, bl: e.bestLap, st: e.stops, pn: e.penalty, pr: e.pitReq ? 1 : 0, u: [...e.used].join(''),
-      fa: e.finishedAt, fl: e.finLaps, fc: e.finCross, ns: e.noStop ? 1 : 0, dnf: e.dnf ? 1 : 0 };
+      dt: e.driveThroughDue, dsq: e.dsq, fa: e.finishedAt, fl: e.finLaps, fc: e.finCross, ns: e.noStop ? 1 : 0, dnf: e.dnf ? 1 : 0 };
   }
 
   // the owner of a remote car has left: the host's AI takes the car over where it is
   takeOver(e, params) {
     if (!e.remote) return;
     e.remote = false; e.net = null; e.friend = false;
+    if (e.driveThroughDue) e.pitReq = true;
     if (e.pit) { e.pit = null; this.recover(e); }
     e.ai = new AIDriver(e, this, params);
   }
@@ -846,27 +902,34 @@ export class Race {
   updatePositions() {
     const es = this.entries.slice();
     es.sort((a, b) => {
+      if (a.dsq !== b.dsq) return a.dsq ? 1 : -1;
       // classified on laps completed, then on time including penalties
       if (a.finishedAt != null && b.finishedAt != null) return (b.finLaps ?? 0) - (a.finLaps ?? 0) || a.finishedAt - b.finishedAt;
       if (a.finishedAt != null) return -1;
       if (b.finishedAt != null) return 1;
       return b.dist - a.dist;
     });
+    const classCounts = {};
     let prev = null;
     es.forEach((e, k) => {
       const old = e.pos;
       e.pos = k + 1;
+      classCounts[e.classId] = (classCounts[e.classId] || 0) + 1;
+      e.classPos = classCounts[e.classId];
       if (this.racing && old > e.pos && this.time - this.raceStart > 3) e.overtakes++;
       e.interval = prev ? Math.max(0, e.gap - prev.gap) : 0;
       if (prev && e.gap === 0) e.interval = (prev.dist - e.dist) / Math.max(10, e.body.speed());
       prev = e;
     });
     this.order = es;
-    if (this.mode === 'race' && this.state === 'racing' && this.finishOrder.length > 0) {
+    if (this.mode === 'race' && this.state === 'racing' && (this.finishOrder.length > 0 || es.every((e) => e.dsq))) {
       const allDone = this.entries.every((e) => e.finishedAt != null || (this.time - this.finishOrder[0].finishedAt > 90));
       if (allDone && this.state !== 'finished') {
         this.state = 'finished';
-        for (const e of this.entries) if (e.finishedAt == null) { e.finishedAt = 1e9; e.dnf = true; }
+        for (const e of this.entries) if (e.finishedAt == null) {
+          if (e.driveThroughDue) this.disqualify(e, this.time);
+          else { e.finishedAt = 1e9; e.dnf = true; }
+        }
       }
     }
   }

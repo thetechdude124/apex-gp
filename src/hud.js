@@ -1,5 +1,7 @@
 // DOM HUD: timing tower, lap/sector timing, delta, speed/gear/rev lights, ERS/DRS,
 // pedal bars, minimap, toasts, start lights, results.
+import { CLASSES, VEHICLES } from './sim/vehicles.js';
+import { bindings } from './bindings.js';
 import { COMPOUNDS } from './sim/physics.js';
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +29,7 @@ export class HUD {
   }
 
   setTrack(T) {
-    this.T = T;
+    this.T = T; this.position = null;
     // minimap transform
     let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
     for (let i = 0; i < T.N; i++) { minx = Math.min(minx, T.x[i]); maxx = Math.max(maxx, T.x[i]); miny = Math.min(miny, T.y[i]); maxy = Math.max(maxy, T.y[i]); }
@@ -52,7 +54,7 @@ export class HUD {
     this.pitPath = new Path2D();
     const P = T.pit, o = {};
     for (let r = P.e0; r <= P.x1; r += 8) { P.pos(r, P.side * (P.lat(r) + 22), o); if (r === P.e0) this.pitPath.moveTo(this.mx(o.x), this.my(o.y)); else this.pitPath.lineTo(this.mx(o.x), this.my(o.y)); }
-    this.drsShown = ''; this.pitHtml = ''; this.bannerHtml = '';
+    this.drsShown = this.pitHtml = this.bannerHtml = null;
     // the same shapes in world coordinates, for the follow (heading-up) map
     const wp = (path, list) => list.forEach(([x, y], k) => (k ? path.lineTo(x, y) : path.moveTo(x, y)));
     this.wTrack = new Path2D();
@@ -71,18 +73,20 @@ export class HUD {
     const v = b.speed() * 3.6;
     $('speed').textContent = Math.round(v);
     $('gear').textContent = b.gear === -1 ? 'R' : b.gear === 0 ? 'N' : b.gear;
-    const rpmF = (b.rpm - 7000) / (b.p.rpmMax - 7000);
+    const rpmF = (b.rpm / b.p.rpmMax - 0.56) / 0.44;
     const lit = Math.max(0, Math.min(15, Math.round(rpmF * 15)));
     const flash = rpmF > 0.97 && Math.floor(performance.now() / 70) % 2 === 0;
     this.revLeds.forEach((d, i) => {
       const on = i < lit;
       d.className = !on ? '' : flash ? 'p' : i < 5 ? 'g' : i < 10 ? 'r' : 'p';
     });
-    $('ersbar').style.width = `${(b.ers / b.p.ersCap) * 100}%`;
+    $('ers').hidden = $('ersbar').parentElement.hidden = !b.p.ersCap;
+    if (b.p.ersCap) $('ersbar').style.width = `${(b.ers / b.p.ersCap) * 100}%`;
     $('ers').classList.toggle('on', b.deploying);
     $('ers').textContent = this.boost && b.deploying ? 'OVERTAKE' : 'ERS';
     const drs = $('drs');
-    const inZone = race.inDrsZone(player.idx);
+    drs.hidden = !b.p.drsCd;
+    const inZone = b.p.drsCd && race.inDrsZone(player.idx);
     drs.className = b.drsOpen ? 'open' : player.drsAvail && inZone ? 'avail' : player.drsAvail ? 'armed' : '';
     // big DRS indicator: says what the state is and, after each detection line, why
     {
@@ -112,7 +116,9 @@ export class HUD {
     // lap / position
     const n = race.entries.length;
     if (race.mode === 'race') {
-      $('pos').innerHTML = `<b>P${player.pos}</b><span>/${n}</span>`;
+      const classRank = race.mixed ? `<small>${CLASSES[player.classId]} · P${player.classPos}</small>` : '';
+      const position = `<b>P${player.pos}</b><span>/${n}</span>${classRank}`;
+      if (this.position !== position) { $('pos').innerHTML = position; this.position = position; }
       $('lap').innerHTML = `LAP <b>${Math.min(race.laps, Math.max(1, player.lap))}</b>/${race.laps}`;
     } else if (race.quali) {
       $('pos').innerHTML = `<b>Q</b>`;
@@ -165,16 +171,17 @@ export class HUD {
       let html = '';
       for (const e of race.order) {
         let gap;
-        if (e.pos === 1) gap = race.state === 'finished' ? 'WINNER' : 'LEADER';
+        if (e.dsq) gap = 'DSQ';
+        else if (e.pos === 1) gap = race.state === 'finished' ? 'WINNER' : 'LEADER';
         else if (e.finishedAt != null && !e.dnf && race.order[0].finishedAt != null) gap = (race.order[0].finLaps ?? 0) > (e.finLaps ?? 0) ? `+${race.order[0].finLaps - e.finLaps} LAP` : fmtTime(e.finishedAt - race.order[0].finishedAt, true);
         else {
           const lapsDown = Math.floor((race.order[0].dist - e.dist) / T.length);
           const g = e.gap > 0 ? e.gap : (race.order[0].dist - e.dist) / Math.max(15, e.body.speed());
           gap = lapsDown >= 1 ? `+${lapsDown} LAP` : `+${g.toFixed(1)}`;
         }
-        const pit = e.pit ? '<em class="pit">PIT</em>' : e.body.drsOpen ? '<em class="d">DRS</em>' : e.penalty ? `<em class="pen">+${e.penalty}s</em>` : '';
+        const pit = e.driveThroughDue && !e.dsq ? '<em class="pen">DT</em>' : e.pit ? '<em class="pit">PIT</em>' : e.body.drsOpen ? '<em class="d">DRS</em>' : e.penalty ? `<em class="pen">+${e.penalty}s</em>` : '';
         const ty = `<span class="ty" style="border-color:${COMPOUNDS[e.body.compound].color}">${e.body.compound}</span>`;
-        html += `<div class="row${e.isPlayer ? ' me' : e.friend ? ' fr' : ''}"><span class="p">${e.pos}</span><span class="c" style="background:${e.color}"></span><span class="n">${e.short}</span>${pit}${ty}<span class="g">${gap}</span></div>`;
+        html += `<div class="row${e.isPlayer ? ' me' : e.friend ? ' fr' : ''}"><span class="p">${e.pos}</span><span class="c" style="background:${e.color}"></span><span class="n">${e.short}</span>${race.mixed ? '<small>' + (e.classId === 'hybrid' ? 'HYB' : CLASSES[e.classId]) + '</small>' : ''}${pit}${ty}<span class="g">${gap}</span></div>`;
       }
       this.tower.innerHTML = html;
       this.tower.style.display = 'block';
@@ -206,10 +213,10 @@ export class HUD {
       c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 11; c.stroke(this.path);
       c.strokeStyle = 'rgba(255,255,255,0.92)'; c.lineWidth = 5.5; c.stroke(this.path);
       c.strokeStyle = drsOn ? '#00e676' : 'rgba(0,200,100,0.8)'; c.lineWidth = drsOn ? 7 : 5.5; c.stroke(this.drsPath);
-      if (race.pitRule !== 'off') { c.strokeStyle = pitOn ? '#35b6ff' : 'rgba(255,255,255,0.5)'; c.lineWidth = 2.5; c.stroke(this.pitPath); }
+      if (race.pitRule !== 'off' || player.driveThroughDue) { c.strokeStyle = pitOn ? '#35b6ff' : 'rgba(255,255,255,0.5)'; c.lineWidth = 2.5; c.stroke(this.pitPath); }
       c.fillStyle = '#fff'; c.fillRect(this.mx(T.x[0]) - 4, this.my(T.y[0]) - 4, 8, 8);
       for (const e of race.entries) {
-        if (e === player) continue;
+        if (e === player || e.dsq) continue;
         c.fillStyle = e.color; c.strokeStyle = '#000'; c.lineWidth = 1.5;
         c.beginPath(); c.arc(this.mx(e.body.X), this.my(e.body.Y), 5, 0, 6.3); c.fill(); c.stroke();
       }
@@ -231,9 +238,9 @@ export class HUD {
       c.strokeStyle = 'rgba(0,0,0,0.65)'; c.lineWidth = 30; c.stroke(this.wTrack);
       c.strokeStyle = 'rgba(255,255,255,0.92)'; c.lineWidth = 17; c.stroke(this.wTrack);
       c.strokeStyle = drsOn ? '#00e676' : 'rgba(0,200,100,0.85)'; c.lineWidth = 17; c.stroke(this.wDrs);
-      if (race.pitRule !== 'off') { c.strokeStyle = pitOn ? '#35b6ff' : 'rgba(180,190,200,0.75)'; c.lineWidth = 6; c.stroke(this.wPit); }
+      if (race.pitRule !== 'off' || player.driveThroughDue) { c.strokeStyle = pitOn ? '#35b6ff' : 'rgba(180,190,200,0.75)'; c.lineWidth = 6; c.stroke(this.wPit); }
       for (const e of race.entries) {
-        if (e === player) continue;
+        if (e === player || e.dsq) continue;
         c.fillStyle = e.color; c.strokeStyle = '#000'; c.lineWidth = 2.5;
         c.beginPath(); c.arc(e.body.X, e.body.Y, 14, 0, 6.3); c.fill(); c.stroke();
       }
@@ -244,15 +251,21 @@ export class HUD {
 
     // start lights overlay
     const sl = $('startlights');
-    if (race.state === 'lights' || (race.state === 'racing' && race.time - (race.raceStart || 0) < 1.2 && race.mode === 'race')) {
+    if (race.state === 'lights' || (race.racing && player.launchPending && !player.autopilot)) {
       sl.style.display = 'flex';
-      [...sl.children].forEach((d, k) => d.classList.toggle('on', race.state === 'lights' && k < race.lightsOn));
+      $('launchHint').textContent = race.state === 'lights'
+        ? (player.driveThroughDue ? 'False start · release the throttle' : 'Keep the throttle released')
+        : (player.launchHeld ? 'Release the throttle, then press to launch' : `Lights out · press ${bindings.text('throttle')} or the throttle trigger`);
+      sl.querySelectorAll('div').forEach((d, k) => d.classList.toggle('on', race.state === 'lights' && k < race.lightsOn));
     } else sl.style.display = 'none';
 
     // pit stop panel + scripted pit lane read-out
     {
       let html = '', cls = '';
-      if (race.mode === 'race' && race.pitRule !== 'off' && race.state !== 'grid' && player.finishedAt == null) {
+      if (player.driveThroughDue && !player.dsq) {
+        cls = 'late';
+        html = `<div class="h"><span class="need">FALSE START</span><small>drive-through</small></div><div class="s">${player.pit ? 'Follow the limiter to pit exit to clear the penalty.' : 'Enter the pit lane by the end of lap ' + player.driveThroughDue + ' to avoid disqualification.'}</div>`;
+      } else if (race.mode === 'race' && race.pitRule !== 'off' && race.state !== 'grid' && player.finishedAt == null) {
         const [w0, w1] = player.plan.window, lap = Math.max(1, player.lap);
         const win = w1 > w0 ? `laps ${w0}–${w1}` : `lap ${w0}`;
         const next = player.pit?.to || race.nextCompound(player);
@@ -311,9 +324,9 @@ export class HUD {
   qualiResults(rows, trackName) {
     const el = $('results');
     const pole = rows[0].time;
-    let html = `<h2>QUALIFYING · ${trackName.toUpperCase()}</h2><table><tr><th>POS</th><th>DRIVER</th><th>TEAM</th><th>TIME</th><th>GAP</th></tr>`;
+    let html = `<h2>QUALIFYING · ${trackName.toUpperCase()}</h2><table><tr><th>POS</th><th>DRIVER</th><th>CAR</th><th>TIME</th><th>GAP</th></tr>`;
     rows.forEach((r, k) => {
-      html += `<tr class="${r.isPlayer ? 'me' : ''}"><td>${k + 1}</td><td><span class="c" style="background:${r.color}"></span>${r.name}</td><td>${r.team}</td><td class="${k === 0 ? 'purple' : ''}">${r.time != null ? fmtTime(r.time) : 'no time'}</td><td>${k === 0 || r.time == null ? '' : fmtTime(r.time - pole, true)}</td></tr>`;
+      html += `<tr class="${r.isPlayer ? 'me' : ''}"><td>${k + 1}</td><td><span class="c" style="background:${r.color}"></span>${r.name}</td><td>${VEHICLES[r.vehicle].name}</td><td class="${k === 0 ? 'purple' : ''}">${r.time != null ? fmtTime(r.time) : 'no time'}</td><td>${k === 0 || r.time == null ? '' : fmtTime(r.time - pole, true)}</td></tr>`;
     });
     const me = rows.findIndex((r) => r.isPlayer) + 1;
     html += `</table><div class="qnote">You start <b>P${me}</b> of ${rows.length}${rows[me - 1].time == null ? ' (no valid lap)' : ''}</div>`
@@ -324,13 +337,13 @@ export class HUD {
 
   results(race) {
     const el = $('results');
-    let html = `<h2>${race.mode === 'race' ? 'RACE CLASSIFICATION' : 'TIME TRIAL'}</h2><table><tr><th>POS</th><th>DRIVER</th><th>TEAM</th><th>TIME / GAP</th><th>TYRES</th><th>BEST LAP</th><th>+/-</th></tr>`;
-    const lead = race.order.find((e) => e.finishedAt != null && !e.dnf) || race.finishOrder[0];
-    const fastest = Math.min(...race.entries.map((e) => e.bestLap ?? 1e9));
+    let html = `<h2>${race.mode === 'race' ? 'RACE CLASSIFICATION' : 'TIME TRIAL'}</h2><table><tr><th>POS</th><th>DRIVER</th><th>TEAM / CAR</th>${race.mixed ? '<th>CLASS POS</th>' : ''}<th>TIME / GAP</th><th>TYRES</th><th>BEST LAP</th><th>+/-</th></tr>`;
+    const lead = race.order.find((e) => e.finishedAt != null && !e.dnf && !e.dsq) || race.finishOrder[0];
+    const fastest = Math.min(...race.entries.filter((e) => !e.dsq).map((e) => e.bestLap ?? 1e9));
     for (const e of race.order) {
-      const tm = e.dnf ? 'DNF' : e === lead ? fmtTime(e.finishedAt - race.raceStart) : e.finishedAt != null ? ((lead.finLaps ?? 0) > (e.finLaps ?? 0) ? `+${lead.finLaps - e.finLaps} LAP` : fmtTime(e.finishedAt - lead.finishedAt, true)) : 'on track';
+      const tm = e.dsq ? 'DSQ · false start' : e.dnf ? 'DNF' : e === lead ? fmtTime(e.finishedAt - race.raceStart) : e.finishedAt != null ? ((lead.finLaps ?? 0) > (e.finLaps ?? 0) ? `+${lead.finLaps - e.finLaps} LAP` : fmtTime(e.finishedAt - lead.finishedAt, true)) : 'on track';
       const gained = e.startPos - e.pos;
-      html += `<tr class="${e.isPlayer ? 'me' : ''}"><td>${e.pos}</td><td><span class="c" style="background:${e.color}"></span>${e.name}</td><td>${e.team}</td><td>${tm}${e.penalty ? ` <em>(+${e.penalty}s${e.noStop ? ' no stop' : ''})</em>` : ''}</td><td>${[...e.used].join(' → ')}</td><td class="${e.bestLap === fastest ? 'purple' : ''}">${fmtTime(e.bestLap)}</td><td class="${gained > 0 ? 'up' : gained < 0 ? 'down' : ''}">${gained > 0 ? '▲' + gained : gained < 0 ? '▼' + -gained : '–'}</td></tr>`;
+      html += `<tr class="${e.isPlayer ? 'me' : ''}"><td>${e.dsq ? '–' : e.pos}</td><td><span class="c" style="background:${e.color}"></span>${e.name}</td><td>${e.team}<br><small>${VEHICLES[e.vehicle].name}</small></td>${race.mixed ? '<td>' + CLASSES[e.classId] + (e.dsq || e.dnf ? ' –' : ' P' + e.classPos) + '</td>' : ''}<td>${tm}${e.penalty ? ` <em>(+${e.penalty}s${e.noStop ? ' no stop' : ''})</em>` : ''}</td><td>${[...e.used].join(' → ')}</td><td class="${e.bestLap === fastest ? 'purple' : ''}">${fmtTime(e.bestLap)}</td><td class="${gained > 0 ? 'up' : gained < 0 ? 'down' : ''}">${gained > 0 ? '▲' + gained : gained < 0 ? '▼' + -gained : '–'}</td></tr>`;
     }
     html += '</table><div class="btns"><button id="resRestart">RESTART</button><button id="resReplay">WATCH REPLAY</button><button id="resMenu">MAIN MENU</button></div>';
     el.innerHTML = html;

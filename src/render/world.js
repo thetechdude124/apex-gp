@@ -156,6 +156,9 @@ export function buildWorld(scene, renderer, T, opts) {
     envScene.add(new THREE.Mesh(band, new THREE.MeshBasicMaterial({ color: bcol, side: THREE.BackSide })));
   }
   const envRT = pmrem.fromScene(envScene, 0.02);
+  // The capture meshes and generator are only needed while baking the reflection map.
+  for (const o of envScene.children) if (o !== sky2) { o.geometry.dispose(); o.material.dispose(); }
+  pmrem.dispose();
   scene.environment = envRT.texture;
   scene.environmentIntensity = time.env ?? 1.0;
   scene.fog = new THREE.FogExp2(time.fog, time.fogD);
@@ -725,7 +728,7 @@ export function buildWorld(scene, renderer, T, opts) {
         }
       });
       sun.shadow.map?.dispose();
-      envRT.dispose(); pmrem.dispose();
+      envRT.dispose(); sky.geometry.dispose(); sky.material.dispose();
     },
   };
 }

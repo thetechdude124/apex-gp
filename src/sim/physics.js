@@ -1,6 +1,6 @@
 // Open-wheel car dynamics: dynamic bicycle model with Pacejka-style lateral tyre
 // forces, friction-circle combined slip, aero downforce/drag with load transfer,
-// 8-speed gearbox, ERS deploy/harvest, DRS, slipstream and dirty air.
+// class-specific gearbox, ERS deploy/harvest, DRS, slipstream and dirty air.
 // Body frame: x forward, y left. World: 2D sim plane (X, Y), heading psi.
 
 export const G = 9.81;
@@ -16,7 +16,7 @@ export const CAR = {
   ClA: 4.3,
   CdA: 1.42,
   aeroBal: 0.43,
-  drsCd: 0.24,
+  drsCd: 0.34,
   drsCl: 0.75,
   mu: 1.78,
   B: 19,
@@ -25,7 +25,7 @@ export const CAR = {
   P: 745e3,
   ersP: 120e3,
   ersCap: 4.0e6,
-  gears: [22, 34, 44.5, 54, 63.5, 73, 83, 94.5],
+  gears: [22, 34, 44.5, 54, 63.5, 73, 83, 102],
   rpmMax: 12500,
   rpmIdle: 4000,
   brakeForce: 56000,
@@ -35,14 +35,11 @@ export const CAR = {
   wheelR: 0.36,
 };
 
-// The player's car is set up a little more "on the nose" than the field's: more front aero and
-// less rear grip margin, so it turns in harder and the rear can be made to move. (The AI keep the
-// calmer CAR balance, which is what keeps a 20-car pack stable.) absTurn: how much braking the
-// ABS keeps free for steering: the share of front grip reserved for cornering at full key while braking.
-export const PLAYER_SETUP = { aeroBal: 0.44, rearGrip: 1.04, absTurn: 0.88 };
-// Differential / rotation setting, 1 (locked: stable, least rotation) .. 5 (open: most rotation).
-// 0 = no differential effects at all (the AI cars).
-export const DIFF_DEFAULT = 3;
+// Differential openness in percent. A null setting leaves the AI stability model alone.
+export const DIFF_DEFAULT = 50;
+export function diffPercent(v) {
+  return Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : DIFF_DEFAULT;
+}
 
 // life: how much of a race distance a set lasts before it is completely worn (race.js scales the
 // wear rate to the race length, like the shortened-race tyre scaling in the big racing games)
@@ -98,11 +95,10 @@ function enginePower(rpm, p) {
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
-// Differential model constants. coast: rear grip given up off-throttle (diff 1 .. diff 5);
+// Differential model constants. coast: rear grip given up off-throttle as the diff opens;
 // power: extra drive the traction control lets through; slip: rear slip angle (rad) the
 // stability assist allows before it steps in; yaw: slack in its yaw damping.
-// lock: yaw resistance of the diff off-throttle, N*m per rad/s, for diff 1..5. coast: rear grip an
-// open diff (4, 5) gives up off-throttle.
+// lock: yaw resistance of the diff off-throttle, N*m per rad/s, at 0, 25, 50, 75 and 100% openness.
 export const DIFF = { coast: 0.03, power: 0.09, slip0: 0.125, slip1: 0.035, catchGain: 110000, yaw: 0.07, lock: [5000, 3000, 1450, 600, 0], lockMax: 5000, settle: 12000 };
 
 export class CarBody {
@@ -127,7 +123,7 @@ export class CarBody {
     this.harvest = 0; this.deploying = false;
     this.lastHit = 0;
     this.manual = false;
-    this.diff = 0;          // 0 off (AI), 1 locked .. 5 open
+    this.diff = null;       // 0 locked .. 100 open
     this.rLP = 0; this.settleS = 0; // slow average of the yaw rate, and how settled the steering is (stability assist)
     this.thrS = 0;          // smoothed throttle, for the differential model
     this.brkS = 0;          // smoothed brake, for the steering's load estimate
@@ -168,14 +164,14 @@ export class CarBody {
     if (this.gear === -1 && inp.throttle > 0.1 && vx > -1) this.gear = 1;
     if (this.gear >= 1) {
       if (this.manual) {
-        if (inp.shiftUp && this.gear < 8) { this.gear++; this.shiftT = 0.05; }
+        if (inp.shiftUp && this.gear < p.gears.length) { this.gear++; this.shiftT = 0.05; }
         if (inp.shiftDown && this.gear > 1) {
           const rpmLow = (vabs / p.gears[this.gear - 2]) * p.rpmMax;
           if (rpmLow < p.rpmMax * 1.02) { this.gear--; this.shiftT = 0.05; }
         }
       } else {
         const rpmNow = (vabs / p.gears[this.gear - 1]) * p.rpmMax;
-        if (rpmNow > p.rpmMax * 0.965 && this.gear < 8 && this.shiftT <= 0) { this.gear++; this.shiftT = 0.08; }
+        if (rpmNow > p.rpmMax * 0.965 && this.gear < p.gears.length && this.shiftT <= 0) { this.gear++; this.shiftT = 0.08; }
         else if (this.gear > 1 && this.shiftT <= 0) {
           const rpmLow = (vabs / p.gears[this.gear - 2]) * p.rpmMax;
           if (rpmLow < p.rpmMax * 0.86) { this.gear--; this.shiftT = 0.08; }
@@ -206,15 +202,15 @@ export class CarBody {
     // differential: open settings let the rear go light when you come off the power (lift-off
     // rotation), a locked one keeps it planted. The pedal is smoothed so nothing happens in a step.
     // None of it applies off the road: on grass and gravel the car behaves as calmly as it can.
-    const dk = this.diff ? (this.diff - 1) / 4 : 0;
-    const dOn = this.diff ? clamp((Math.min(env.front.mu, env.rear.mu) - 0.6) / 0.3, 0, 1) : 0;
+    const dk = (this.diff ?? 0) / 100;
+    const dOn = this.diff != null ? clamp((Math.min(env.front.mu, env.rear.mu) - 0.6) / 0.3, 0, 1) : 0;
     this.thrS += (clamp(inp.throttle, 0, 1) - this.thrS) * Math.min(1, dt * 7);
     this.brkS += (clamp(inp.brake, 0, 1) - this.brkS) * Math.min(1, dt * 5);
     const coast = DIFF.coast * Math.max(0, dk - 0.5) * 2 * dOn * (1 - this.thrS) * (1 - 0.5 * clamp(inp.brake, 0, 1));
     const slipThr = 0.115 + (DIFF.slip0 - 0.115 + DIFF.slip1 * dk) * dOn; // rear slip the stability assist allows
     const tyre = this.gripMul * tyreGrip(this.tyreWear);
     // (off the road the rear also gets the field's calmer grip margin back)
-    const rearGrip = this.diff ? CAR.rearGrip + (p.rearGrip - CAR.rearGrip) * dOn : p.rearGrip;
+    const rearGrip = this.diff != null ? CAR.rearGrip + (p.rearGrip - CAR.rearGrip) * dOn : p.rearGrip;
     const muF = p.mu * tyre * env.front.mu, muR = p.mu * rearGrip * (1 - coast) * tyre * env.rear.mu;
     const DmaxF = muF * Fzf, DmaxR = muR * Fzr;
     this.surfMuF = env.front.mu; this.surfMuR = env.rear.mu; // for steerCommand
@@ -235,9 +231,9 @@ export class CarBody {
     if (this.gear !== 0) {
       Pw = enginePower(this.rpm, p) * throttle;
       if (inp.ers && this.ers > 0 && throttle > 0.8 && this.gear >= 1) {
-        Pw += p.ersP; this.ers -= p.ersP * dt; this.deploying = true;
+        Pw += p.ersP; this.ers = Math.max(0, this.ers - p.ersP * dt); this.deploying = true;
       }
-      if (this.gear >= 1 && vabs >= gTop * 0.998) Pw *= this.gear === 8 ? 0.2 : 0; // rev limiter
+      if (this.gear >= 1 && vabs >= gTop * 0.998) Pw *= this.gear === p.gears.length ? 0.2 : 0; // rev limiter
     }
     let Fdrive = 0;
     if (this.gear >= 1) Fdrive = Pw / Math.max(vabs, gTop * 0.24);
@@ -253,10 +249,10 @@ export class CarBody {
     if (this.gear === -1 && brake > 0) { Fbf = Fbr = 0; }
     // harvest under braking
     this.harvest = 0;
-    if (brake > 0.1 && vx > 10) {
+    if (p.ersP && brake > 0.1 && vx > 10) {
       const h = Math.min(p.ersP, brake * 140e3) * dt;
       this.ers = Math.min(p.ersCap, this.ers + h); this.harvest = brake;
-    } else if (throttle < 0.05 && vx > 20) {
+    } else if (p.ersP && throttle < 0.05 && vx > 20) {
       this.ers = Math.min(p.ersCap, this.ers + 25e3 * dt); this.harvest = 0.3;
     }
 
@@ -336,9 +332,11 @@ export class CarBody {
     // Differential on the overrun: off the throttle a locking diff resists the car's rotation
     // (the rear wheels are tied together), which is what keeps the rear from coming round more
     // and more while you coast through a corner with the key held. Open settings give it up.
-    if (this.diff && vx > 5) {
+    if (this.diff != null && vx > 5) {
       const off = clamp(1 - this.thrS * 5, 0, 1); // gone by a fifth throttle
-      const lock = DIFF.lock[this.diff - 1] * off * dOn * (Fzr / ((W * a) / L)); // grows with the load on the rear tyres, like their grip
+      const point = dk * (DIFF.lock.length - 1), left = Math.floor(point);
+      const damping = DIFF.lock[left] + ((DIFF.lock[left + 1] ?? 0) - DIFF.lock[left]) * (point - left);
+      const lock = damping * off * dOn * (Fzr / ((W * a) / L)); // grows with the load on the rear tyres, like their grip
       Mz -= clamp(r * lock, -DIFF.lockMax, DIFF.lockMax);
     }
     if (env.esc && vx > 8) {
@@ -410,7 +408,7 @@ export class CarBody {
     this.drsOpen = false; this.lockF = false; this.spinR = false; this.slideF = 0; this.slideR = 0;
     this.deploying = false; this.harvest = 0;
     this.gear = 1;
-    while (this.gear < 8 && v > p.gears[this.gear - 1] * 0.9) this.gear++;
+    while (this.gear < p.gears.length && v > p.gears[this.gear - 1] * 0.9) this.gear++;
     const rpmTarget = clamp((v / p.gears[this.gear - 1]) * p.rpmMax, p.rpmIdle, p.rpmMax);
     this.rpm += (rpmTarget - this.rpm) * Math.min(1, dt * 12);
     this.wheelAng += (v / p.wheelR) * dt;
@@ -422,7 +420,7 @@ export class CarBody {
     this.vx = v; this.vy = 0; this.r = 0; this.delta = 0;
     this.axS = 0; this.ayS = 0; this.thrS = 0; this.brkS = 0; this.rLP = 0; this.settleS = 0;
     this.gear = 1;
-    while (this.gear < 8 && v > this.p.gears[this.gear - 1] * 0.9) this.gear++; // rolling start: pick a sane gear
+    while (this.gear < this.p.gears.length && v > this.p.gears[this.gear - 1] * 0.9) this.gear++; // rolling start: pick a sane gear
   }
 }
 
@@ -457,8 +455,8 @@ export function axleLimits(b) {
   const Fzf = Math.max(300, (W * p.b) / p.L - shift + DF * p.aeroBal);
   const Fzr = Math.max(300, (W * p.a) / p.L + shift + DF * (1 - p.aeroBal));
   const tyre = b.gripMul * tyreGrip(b.tyreWear);
-  const dOn = b.diff ? clamp((Math.min(b.surfMuF ?? 1, b.surfMuR ?? 1) - 0.6) / 0.3, 0, 1) : 0;
-  const rg = b.diff ? CAR.rearGrip + (p.rearGrip - CAR.rearGrip) * dOn : p.rearGrip;
+  const dOn = b.diff != null ? clamp((Math.min(b.surfMuF ?? 1, b.surfMuR ?? 1) - 0.6) / 0.3, 0, 1) : 0;
+  const rg = b.diff != null ? CAR.rearGrip + (p.rearGrip - CAR.rearGrip) * dOn : p.rearGrip;
   return {
     front: (p.mu * tyre * (b.surfMuF ?? 1) * Fzf) / ((m * p.b) / p.L),
     rear: (p.mu * rg * tyre * (b.surfMuR ?? 1) * Fzr) / ((m * p.a) / p.L),
@@ -469,7 +467,7 @@ export function steerCommand(b, s, assist = true) {
   const v = Math.abs(b.vx);
   s = clamp(s, -1, 1);
   let d;
-  if (b.diff) {
+  if (b.diff != null) {
     // Player car: the request is a fraction of what the FRONT tyres can actually hold right now
     // (compound, wear, temperature, wet track, grass, and the load on them), so full key is the
     // limit and half key is half of it whatever the conditions; the rear's share sets how much
@@ -505,13 +503,13 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
   const { N } = T;
   const cdf = (0.5 * RHO * p.ClA) / p.mass;
   const cdd = (0.5 * RHO * p.CdA) / p.mass;
-  const vTop = 96;
+  const vTop = p.gears.at(-1);
   // A less committed driver is not slower everywhere: corners the car takes easily flat-out stay
   // flat for anyone. `ease` is 1 where the ideal car has lots of grip in hand, 0 where it is on
   // the limit, and the driver's commitment (usage) only bites where the corner is actually hard.
   let ease = null;
   if (usage < 0.999) {
-    const key = `_ideal${gripMul}`;
+    const key = `_ideal:${p.profileKey ?? "f1/balanced"}:${gripMul}`;
     const ideal = rl[key] || (rl[key] = computeProfile(T, rl, p, 1, gripMul, 1));
     ease = new Float64Array(N);
     for (let i = 0; i < N; i++) {
@@ -542,7 +540,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
     const lat = vi * vi * Math.abs(rl.kappa[i]);
     const ratio = Math.min(1, lat / (mu * (G + cdf * vi * vi)));
     const grip = Math.sqrt(1 - ratio * ratio);
-    const gTop = p.gears.find((g) => g > vi) ?? p.gears[7];
+    const gTop = p.gears.find((g) => g > vi) ?? vTop;
     const Fe = (p.P * 0.97) / Math.max(vi, gTop * 0.24);
     const Fz_r = p.mass * G * (p.a / p.L) + 0.5 * RHO * p.ClA * vi * vi * (1 - p.aeroBal);
     const aDrive = Math.min(Fe / p.mass, (mu * Fz_r * grip) / p.mass);
