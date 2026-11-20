@@ -79,10 +79,14 @@ export function buildWeather(scene, world, T, opts = {}) {
 
   // ---------- soaked surfaces (the amount is a uniform, so the track can get wetter or dry out)
   const WET = { value: 0 };
-  const soaked = [S.track, S.run, S.kerb, S.line, S.gravel, S.verge].filter(Boolean);
+  const soaked = [S.track, S.run, S.kerb, S.kerbStep, S.sausage, S.astroturf, S.striped, S.line, S.gravel, S.verge].filter(Boolean);
   soak(S.track, WET, { dark: 0.42, gloss: 0.62, puddles: 0.9, key: 'track' });
   soak(S.run, WET, { dark: 0.5, gloss: 0.65, puddles: 0.7, key: 'run' });
   soak(S.kerb, WET, { dark: 0.8, gloss: 0.45, puddles: 0.0, key: 'kerb' });
+  soak(S.kerbStep, WET, { dark: 0.8, gloss: 0.45, puddles: 0.0, key: 'kerbStep' });
+  soak(S.sausage, WET, { dark: 0.82, gloss: 0.42, puddles: 0.0, key: 'sausage' });
+  soak(S.astroturf, WET, { dark: 0.72, gloss: 0.55, puddles: 0.0, key: 'astroturf' });
+  soak(S.striped, WET, { dark: 0.62, gloss: 0.52, puddles: 0.5, key: 'striped' });
   soak(S.line, WET, { dark: 0.85, gloss: 0.5, puddles: 0.0, key: 'line' });
   soak(S.gravel, WET, { dark: 0.7, gloss: 0.8, puddles: 0.0, key: 'gravel' });
   soak(S.verge, WET, { dark: 0.82, gloss: 0.85, puddles: 0.0, key: 'verge' });

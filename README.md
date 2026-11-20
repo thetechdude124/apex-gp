@@ -18,6 +18,8 @@ Enter your driver name and choose a random or custom starting position. With Ran
 
 Imola follows the modern 4.909 km Grand Prix layout. The mapped centerline is scaled in metres, and elevation is interpolated between the operator’s published corner heights. Sector splits and the main-straight DRS zone follow the 2024 race map. [Centerline data](https://github.com/bacinger/f1-circuits/blob/master/circuits/it-1953.geojson) · [Circuit operator’s elevation map](https://www.autodromoimola.it/downloads/Presentazione_MICE_Autodromo_2021_EN.pdf) · [FIA circuit map](https://www.fia.com/sites/default/files/decision-document/2024%20Imola%20Event%20-%20Circuit%20Map%20Imola%202024.pdf)
 
+Spa-Francorchamps follows the modern 7.004 km Belgian Grand Prix layout through the Ardennes forest, with 102 m of elevation change from Stavelot to Malmedy, the steep climb through Eau Rouge and Raidillon, corner banking, multi-type Belgian red-and-yellow kerbs with anti-cut chicane sausages, striped tarmac and gravel runoff, official sector splits, and both Kemmel Straight and pit-straight DRS zones. [Centerline data](https://github.com/bacinger/f1-circuits/blob/master/circuits/be-1925.geojson)
+
 Run locally with `python3 -m http.server 8000 --bind 127.0.0.1` from the repository and open [the local game](http://localhost:8000/). Run the simulation checks with `node --test tests/racing.test.mjs` using Node 22.7 or newer.
 
 Built with three.js ([MIT license](vendor/three/LICENSE)).

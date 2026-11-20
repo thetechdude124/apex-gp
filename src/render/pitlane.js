@@ -475,7 +475,10 @@ export function buildDrsMarkers(root, T) {
     g.rotateX(-Math.PI / 2);
     const m = new THREE.Mesh(g, paintMat);
     m.position.copy(V(T.x[z.detect], T.y[z.detect], T.h[z.detect] + 0.012));
+    m.rotation.order = 'YZX';
     m.rotation.y = Math.atan2(T.ty[z.detect], T.tx[z.detect]);
+    m.rotation.z = Math.atan(T.grade[z.detect]);
+    m.rotation.x = T.camber ? T.camber[z.detect] : 0;
     m.receiveShadow = true;
     root.add(m);
     roadPaint(root, T, (z.start + 4) % N, 0, road, 15, 6.4);

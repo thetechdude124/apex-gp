@@ -2,6 +2,7 @@
 // The racing surface is the smooth path that runs straight between vertices and arcs
 // around each vertex with the given radius. elev: [lap fraction, metres] keyframes.
 import { IMOLA_PATH } from './track_imola.js';
+import { SPA_PATH, SPA_ELEV, SPA_CAMBER, SPA_KERBS, SPA_RUNOFF, SPA_ARMCO } from './track_spa.js';
 
 export const TRACKS = [
   {
@@ -148,6 +149,38 @@ export const TRACKS = [
       [3390, 69.73], [3640, 64.73], [3970, 53.40], [4145, 41.03], [4275, 38.89],
       [4515, 38.48], [4608, 39.66]].map(([m, h]) => [m / 4909, h - 40.8]),
     scenery: 'med',
+    time: 'day',
+  },
+  {
+    id: 'spa',
+    name: 'Circuit de Spa-Francorchamps',
+    country: 'Stavelot, Belgium',
+    blurb: 'Seven kilometres in the Ardennes forest. Plunge into Eau Rouge, climb blind up Raidillon, sweep through banked Pouhon and Blanchimont, and nail the Bus Stop chicane.',
+    width: 13.5,
+    wallBase: 12.2,
+    path: SPA_PATH,
+    smooth: 180,
+    elevSmooth: 140,
+    wallCurvCap: true,
+    pitSide: -1,
+    pitScale: 0.72,
+    sectorMetres: [2244, 5113],
+    drsMetres: [
+      { detect: 890, start: 1380, end: 2190 },
+      { detect: 6415, start: 6695, end: 175 },
+    ],
+    elev: SPA_ELEV,
+    camber: SPA_CAMBER,
+    kerbZones: SPA_KERBS,
+    runoffZones: SPA_RUNOFF,
+    armcoZones: SPA_ARMCO,
+    kerbColors: ['#c2151f', '#e8be17'],
+    stands: [
+      { m: 6970, side: 1, len: 220 },
+      { m: 218, side: 1, len: 115 },
+      { m: 6555, side: 1, len: 120 },
+    ],
+    scenery: 'ardennes',
     time: 'day',
   },
 ];

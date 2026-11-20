@@ -108,6 +108,37 @@ export function treeTexture(kind, seed = 1) {
       }
     }
     blob(g, tx, ty + 4, 13, 60, 30, 14);
+  } else if (kind === 'spruce') {
+    // tall, full conical Ardennes Norway spruce: broad drooping emerald boughs rising to a spire
+    size = [10.8, 19.5];
+    trunk(128, 128, 512, 260, 10, 4, '#34271e');
+    for (let pass = 0; pass < 2; pass++) for (let t = 0; t < 13; t++) {
+      const yTop = 8 + t * 34, hw = 14 + Math.pow(t, 0.94) * 10.2, hh = 84;
+      const n = 155 + t * 26;
+      for (let k = 0; k < n; k++) {
+        const v = Math.pow(R(), 0.7), u = (R() * 2 - 1) * v;
+        const x = 128 + u * hw, y = yTop + v * hh + (R() - 0.5) * 7;
+        const edge = Math.abs(u) / (v + 0.05);
+        const light = pass === 0 ? 6 + R() * 5.5 : 11 + R() * 12 - edge * 3 + (u < 0 ? 4.5 : 0) - (v > 0.72 ? 3.5 : 0);
+        if (pass === 1 && R() < 0.42) continue;
+        g.strokeStyle = `hsl(${130 + R() * 22},${28 + R() * 16}%,${light}%)`;
+        g.lineWidth = 2.0 + R() * 2.4;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.sign(u || 1) * (6 + R() * 10), y + 5 + R() * 8); g.stroke();
+      }
+    }
+  } else if (kind === 'beech') {
+    // lush deciduous Ardennes beech/birch: tall pale-bark trunk and airy olive-emerald crown
+    size = [12, 15.5];
+    trunk(128, 128, 512, 230, 10, 6, '#574e45');
+    g.strokeStyle = '#574e45'; g.lineWidth = 6;
+    for (const a of [-0.75, -0.25, 0.3, 0.8]) { g.beginPath(); g.moveTo(128, 320); g.lineTo(128 + Math.sin(a) * 84, 320 - Math.cos(a) * 130); g.stroke(); }
+    for (let pass = 0; pass < 3; pass++) for (let k = 0; k < 460; k++) {
+      const a = R() * 6.283, rr = Math.sqrt(R());
+      const x = 128 + Math.cos(a) * rr * 114, y = 168 + Math.sin(a) * rr * 158;
+      if (y > 350 && Math.abs(x - 128) < 55) continue;
+      const lit = (1 - (y - 20) / 330) * 14 + (x < 128 ? 4 : 0);
+      blob(g, x, y, 7 + R() * 10, 82 + R() * 34, 28 + R() * 14, 10 + pass * 4.5 + lit * (0.45 + pass * 0.28) + R() * 5);
+    }
   }
   return { map: finish(c), w: size[0], h: size[1] };
 }

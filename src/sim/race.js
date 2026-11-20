@@ -273,8 +273,13 @@ export class Race {
   updateTrackPos(e) {
     const T = this.T, b = e.body;
     const pr = project(T, b.X, b.Y, e.idx);
+    const cam = pr.camber || 0;
+    const lim = T.width / 2 + 2.5;
+    const dc = Math.max(-lim, Math.min(lim, pr.d));
     e.prevIdx = e.idx;
-    e.idx = pr.i; e.frac = pr.f; e.s = pr.s; e.d = pr.d; e.h = pr.h; e.grade = pr.grade;
+    e.idx = pr.i; e.frac = pr.f; e.s = pr.s; e.d = pr.d;
+    e.h = pr.h + (cam ? dc * Math.sin(cam) : 0);
+    e.grade = pr.grade; e.camber = cam;
     e.pr = pr;
     return pr;
   }
@@ -282,8 +287,10 @@ export class Race {
   axleSurface(e, key, i, d) {
     const a = this.surfaceAt(i, d + 0.8), b = this.surfaceAt(i, d - 0.8);
     if (a === b) return a;
-    const o = e[key] || (e[key] = { mu: 1, drag: 0, bump: 0 });
-    o.mu = (a.mu + b.mu) / 2; o.drag = (a.drag + b.drag) / 2; o.bump = Math.max(a.bump, b.bump);
+    const o = e[key] || (e[key] = { mu: 1, drag: 0, bump: 0, kerb: 0, h: 0 });
+    o.mu = (a.mu + b.mu) / 2; o.drag = (a.drag + b.drag) / 2;
+    o.bump = Math.max(a.bump, b.bump); o.kerb = Math.max(a.kerb || 0, b.kerb || 0);
+    o.h = ((a.h || 0) + (b.h || 0)) / 2;
     return o;
   }
 
@@ -292,9 +299,24 @@ export class Race {
     const S = this.surf;
     if (ad <= w2) return S.track;
     const kerb = left ? T.kerbL[i] : T.kerbR[i];
-    if (ad <= w2 + 1.4) return kerb ? S.kerb : S.runoff;
+    if (kerb === 1 && ad <= w2 + 1.4) return S.kerb;
+    if (kerb === 2) {
+      if (ad <= w2 + 1.55) return S.kerbHigh;
+      if (ad <= w2 + 2.65) return S.astroturf;
+    }
+    if (kerb === 3) {
+      if (ad <= w2 + 1.25) return S.kerb;
+      if (ad <= w2 + 2.3) return S.sausage;
+    }
+    if (kerb === 4) {
+      if (ad <= w2 + 2.1) return S.kerbExit;
+      if (ad <= w2 + 3.6) return S.astroturf;
+    }
+    if (kerb === 5 && ad <= w2 + 1.1) return S.kerbFlat;
+    if (ad <= w2 + 1.4) return S.runoff;
     if (T.pit && T.pit.zone[i] && left === (T.pit.side === 1)) return S.runoff; // paved pit apron
     const ro = left ? T.runoffL[i] : T.runoffR[i];
+    if (ro === 3) return S.runoff;
     if (ro) return ad <= w2 + 9 ? S.runoff : S.gravel;
     return S.grass;
   }
@@ -559,6 +581,7 @@ export class Race {
       b.step(dt, inp, {
         front: e.surfF, rear: e.surfR,
         grade: e.grade * Math.cos(herr),
+        camber: (e.camber || 0) * Math.cos(herr),
         slip: e.slip, dirty: e.dirty,
         tc: e.assists.tc, abs: e.assists.abs, esc: !!e.assists.esc,
       });

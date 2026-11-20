@@ -276,6 +276,46 @@ test('Imola preserves lap length, corner elevations and the main-straight DRS zo
   assert.ok(track.drs[0].start > track.drs[0].end);
 });
 
+test('Spa-Francorchamps preserves 7.004 km scale, 102 m elevation, multi-type kerbs, banking, dual DRS and clean pit lane', () => {
+  const spa = buildTrack(TRACKS.find(t => t.id === 'spa'));
+  assert.ok(Math.abs(spa.length - 7004) < 0.5);
+  const height = metres => spa.h[Math.round(metres / spa.ds) % spa.N];
+  const elevSpan = Math.max(...spa.h) - Math.min(...spa.h);
+  assert.ok(elevSpan > 100 && elevSpan < 104, `expected ~102 m elevation span, got ${elevSpan.toFixed(2)}`);
+  assert.ok(height(1195) - height(898) > 36, 'Raidillon climbs sharply out of Eau Rouge');
+  assert.ok(height(2535) > height(4985) + 99, 'Malmedy sits ~102 m above Stavelot');
+  assert.ok(Math.max(...spa.grade) > 0.16 && Math.max(...spa.grade) < 0.20, 'Raidillon peaks around 17-18% grade');
+  // inside walls stay strictly inside the local curvature center (no ribbon folding at La Source / Bus Stop)
+  for (let i = 0; i < spa.N; i++) {
+    if (spa.kappa[i] > 0.01) assert.ok(spa.wallL[i] < 1 / spa.kappa[i] - 0.5);
+    if (spa.kappa[i] < -0.01) assert.ok(spa.wallR[i] < 1 / -spa.kappa[i] - 0.5);
+  }
+  // dual FIA DRS zones (Kemmel Straight and wrap-around pit straight) and official sector splits
+  assert.equal(spa.drs.length, 2);
+  assert.ok(spa.drs[0].start < spa.drs[0].end);
+  assert.ok(spa.drs[1].start > spa.drs[1].end);
+  assert.ok(Math.abs(spa.sectors[1] * spa.ds - 2244) < 4);
+  assert.ok(Math.abs(spa.sectors[2] * spa.ds - 5113) < 4);
+  // all five kerb types present, with distinct physical bump/height response on chicane sausages and exit astroturf
+  const types = new Set([...spa.kerbL, ...spa.kerbR]);
+  for (const t of [1, 2, 3, 4, 5]) assert.ok(types.has(t), `missing kerb type ${t}`);
+  const r = new Race(spa, { mode: 'trial', laps: 1, pits: 'off', grid: [{ isPlayer: true, vehicle: 'f1' }] });
+  const w2 = spa.width / 2;
+  const idxBusStop = Math.round(6610 / spa.ds);
+  const idxRaidillon = Math.round(1010 / spa.ds);
+  const idxPouhonExit = Math.round(4000 / spa.ds);
+  assert.equal(r.surfaceAt(idxBusStop, -(w2 + 1.8)), SURF.sausage);
+  assert.equal(r.surfaceAt(idxRaidillon, -(w2 + 0.9)), SURF.kerbHigh);
+  assert.equal(r.surfaceAt(idxPouhonExit, -(w2 + 2.8)), SURF.astroturf);
+  assert.ok(SURF.sausage.bump > SURF.kerbHigh.bump && SURF.kerbHigh.bump > SURF.kerb.bump && SURF.kerb.bump > SURF.kerbFlat.bump);
+  // road banking in Pouhon tilts left (negative camber) and adds cornering speed
+  const idxPouhon = Math.round(3675 / spa.ds);
+  assert.ok(spa.camber[idxPouhon] < -0.04);
+  assert.ok(spa.camber[idxRaidillon] > 0.04);
+  // scaled pit lane fits cleanly between Bus Stop exit and La Source entry
+  assert.ok(spa.pit.e0 > -320 && spa.pit.x1 < 180);
+});
+
 test('changeable weather starts partway through a one-lap race or an open time trial', () => {
   for (const mode of ['race', 'trial']) {
     const r = raceWith({ laps: 1, mode, weather: 'raining', changeAt: 0.4 });

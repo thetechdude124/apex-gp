@@ -343,7 +343,7 @@ let camMode = 0;
 const CAMS = ['TV POD', 'COCKPIT', 'CHASE', 'FAR CHASE', 'TRACKSIDE'];
 let showroom = null;
 const camRig = new THREE.Object3D();
-let camGrade = 0;
+let camGrade = 0, camCamber = 0;
 let settings = null;
 let introT = 0;
 let resultsShown = 0, dsqResults = false;
@@ -916,18 +916,23 @@ function syncCars(dt) {
     }
     let herr = b.psi - Math.atan2(T.ty[e.idx], T.tx[e.idx]);
     const grade = (e.grade || 0) * Math.cos(herr);
-    // ride height follows the surface the car is on: verges fall away by a few centimetres, the
-    // pit lane and its apron are level with the track (a bigger drop here used to bury the wheels)
+    const camber = (e.camber || 0) * Math.cos(herr);
+    // ride height follows the surface the car is on: raised kerbs and anti-cut sausages lift the
+    // chassis, verges fall away by a few centimetres, and the pit apron stays level with the track
     const over = Math.abs(e.d) - T.width / 2 - 1.4;
     const inPits = e.pit || e.replayPit || (T.pit.zone[e.idx] && e.d * T.pit.side > 0);
-    const off = over <= 0 ? 0 : inPits ? -0.012 : -0.012 - Math.min(0.06, over * 0.008);
-    const kerbBump = e.surfF?.bump === 1 && b.speed() > 5 ? Math.sin(e.s * 2.6) * 0.012 : 0; // kerb ridges, not noise
+    const surfH = Math.max(0, ((e.surfF?.h || 0) + (e.surfR?.h || 0)) * 0.5);
+    c.surfH = (c.surfH || 0) + (surfH - (c.surfH || 0)) * Math.min(1, dt * 28);
+    const off = c.surfH > 0.002 ? c.surfH : over <= 0 ? 0 : inPits ? -0.012 : -0.012 - Math.min(0.06, over * 0.008);
+    const onKerb = (e.surfF?.kerb || 0) > 0 || (e.surfR?.kerb || 0) > 0;
+    const kBump = Math.max(e.surfF?.bump || 0, e.surfR?.bump || 0);
+    const kerbBump = onKerb && b.speed() > 5 ? Math.sin(e.s * 2.8) * 0.012 * Math.min(2.0, kBump) : 0; // kerb ridges, not noise
     mesh.position.set(e.rX ?? b.X, (e.rH ?? e.h ?? 0) + off + kerbBump, -(e.rY ?? b.Y));
     mesh.rotation.order = 'YZX';
     mesh.rotation.y = e.rPsi ?? b.psi;
-    // stiff race suspension: a few millimetres of dive and roll, no more
+    // stiff race suspension: a few millimetres of dive and roll, plus track cross-slope banking
     mesh.rotation.z = Math.atan(grade) + clamp(b.axS * 0.00022, -0.011, 0.007);
-    mesh.rotation.x = clamp(b.ayS * 0.00038, -0.019, 0.019);
+    mesh.rotation.x = camber + clamp(b.ayS * 0.00038, -0.019, 0.019);
     const ud = mesh.userData;
     for (const w of ud.wheels) {
       if (w.front) w.steer.rotation.y = b.delta;
@@ -1014,7 +1019,8 @@ function emitEffects(dt) {
     c.grade0 = g1;
     c.comp = (c.comp || 0) + (comp - (c.comp || 0)) * Math.min(1, dt * 10);
     const load = v > 60 ? Math.min(1.3, (v - 60) / 30) : 0;
-    const p = load * (0.06 + (c.comp > 2.2 ? 0.9 : 0) + (b.axS < -32 ? 0.45 : 0)) + (e.surfF.bump === 1 && v > 30 ? 0.4 : 0);
+    const kSpark = (e.surfF?.kerb >= 2 || e.surfR?.kerb >= 2) && v > 14 ? 0.95 : ((e.surfF?.kerb || 0) > 0 && (e.surfF?.bump || 0) >= 0.9 && v > 28 ? 0.42 * e.surfF.bump : 0);
+    const p = load * (0.06 + (c.comp > 2.2 ? 0.9 : 0) + (b.axS < -32 ? 0.45 : 0)) + kSpark;
     if (e === player) bottoming = Math.max(bottoming * Math.exp(-dt * 9), Math.min(1, p));
     if (Math.random() < p * dt * 30) effects.spark(at(-1.0 - Math.random() * 0.8, (Math.random() - 0.5) * 0.9), vel, mesh.position.y + 0.02);
   }
@@ -1075,6 +1081,7 @@ function updateCamera(dt) {
   }
   const mode = lookBack ? 'back' : CAMS[camMode];
   let wantNear = 0.5;
+  camera.up.set(0, 1, 0);
   if (mode === 'CHASE' || mode === 'FAR CHASE' || mode === 'back') {
     const far = mode === 'FAR CHASE';
     fov = view.fov(far ? 'FAR CHASE' : 'CHASE') + clamp(v / 90, 0, 1) * 9;
@@ -1096,12 +1103,13 @@ function updateCamera(dt) {
   } else if (mode === 'TV POD' || mode === 'COCKPIT') {
     // rigidly mounted on the car: TV pod sits on top of the airbox, cockpit is the driver's eye
     const pod = mode === 'TV POD';
-    // Mounted on the chassis: follows heading and the road's gradient, nothing else. The view never
+    // Mounted on the chassis: follows heading, road gradient and subtle track banking. The view never
     // swings with the steering input, and pedal-induced dive / roll is left to the bodywork you see.
     camGrade += ((player.grade || 0) - camGrade) * Math.min(1, dt * 6);
+    camCamber += ((player.camber || 0) - camCamber) * Math.min(1, dt * 6);
     camRig.position.copy(m.position);
     camRig.rotation.order = 'YZX';
-    camRig.rotation.set(0, player.rPsi ?? b.psi, Math.atan(camGrade));
+    camRig.rotation.set(camCamber, player.rPsi ?? b.psi, Math.atan(camGrade));
     camRig.updateMatrix();
     const { eye, roofHeight } = m.userData;
     const local = pod ? new THREE.Vector3(-0.38, roofHeight ? roofHeight + 0.23 : 1.17, 0)
@@ -1109,7 +1117,7 @@ function updateCamera(dt) {
     const lateral = local.z;
     wantNear = pod ? 0.5 : 0.12; // the pod's own housing / airbox is clipped out of view
     camera.position.copy(local.applyMatrix4(camRig.matrix));
-    camera.up.set(0, 1, 0);
+    camera.up.set(0, Math.cos(camCamber * 0.55), Math.sin(camCamber * 0.55)).applyQuaternion(yawQ);
     camera.lookAt(new THREE.Vector3(20, pod ? -0.75 : 0.32, lateral).applyMatrix4(camRig.matrix));
     fov = view.fov(mode) + clamp(v / 90, 0, 1) * (pod ? 7 : 6);
   } else if (mode === 'TRACKSIDE') {
@@ -1126,8 +1134,9 @@ function updateCamera(dt) {
     const dist = best.p.distanceTo(m.position);
     fov = clamp(2 * Math.atan(14 / dist) * 57.3, 6, 55);
   }
-  // vibration: kerbs and impacts only (smooth, decaying), plus a whisper at very high speed
-  const kerb = player.surfF?.bump === 1 && v > 8 ? 0.5 : player.surfF?.bump > 1 ? 0.8 : 0;
+  // vibration: kerbs, anti-cut sausage jolts and impacts (smooth, decaying), plus a whisper at very high speed
+  const maxKBump = Math.max((player.surfF?.kerb ? player.surfF.bump : 0), (player.surfR?.kerb ? player.surfR.bump : 0));
+  const kerb = maxKBump > 0 && v > 6 ? Math.min(1.25, maxKBump * 0.52) : 0;
   shake = Math.max(shake * Math.exp(-dt * 7), kerb);
   const onboard = mode === 'TV POD' || mode === 'COCKPIT';
   const amp = shake * 0.012 + (onboard ? clamp((v - 70) / 30, 0, 1) * 0.0015 : 0);
@@ -1156,7 +1165,8 @@ function updateAudio() {
   const onRoad = b.speed() > 6 && player.surfF.drag === 0;
   audio.setSqueal(onRoad ? Math.max(b.spinR ? 0.8 : 0, b.slideR * 0.9) : 0);
   audio.setScrub(onRoad ? Math.max(b.lockF ? 1 : 0, b.slideF * 0.9) : 0);
-  audio.setKerb(player.surfF?.bump === 1 || player.surfR?.bump === 1 ? b.speed() : 0);
+  const onAnyKerb = (player.surfF?.kerb || 0) > 0 || (player.surfR?.kerb || 0) > 0;
+  audio.setKerb(onAnyKerb ? b.speed() : 0);
   audio.setScrape(bottoming > 0.3 ? bottoming : 0);
   if (bottoming > 0.6) shake = Math.max(shake, 0.35);
   audio.setWind(b.speed());

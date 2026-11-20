@@ -70,20 +70,30 @@ export function warmGrip(x) { const c = 1 - (x < 0 ? 0 : x > 1 ? 1 : x); return 
 // and brake, gravel slows the car firmly but never beaches it, kerbs and painted run-off are
 // close to full grip.
 export const SURF = {
-  track: { mu: 1.0, drag: 0, bump: 0 },
-  kerb: { mu: 0.95, drag: 0, bump: 1 },
-  runoff: { mu: 0.92, drag: 0, bump: 0 },
-  grass: { mu: 0.62, drag: 0.15, bump: 0.35 },
-  gravel: { mu: 0.56, drag: 0.6, bump: 0.8 },
+  track: { mu: 1.0, drag: 0, bump: 0, kerb: 0, h: 0 },
+  kerbFlat: { mu: 0.97, drag: 0, bump: 0.65, kerb: 1, h: 0.02 },
+  kerb: { mu: 0.95, drag: 0, bump: 1, kerb: 1, h: 0.045 },
+  kerbHigh: { mu: 0.91, drag: 0, bump: 1.35, kerb: 1, h: 0.085 },
+  kerbExit: { mu: 0.94, drag: 0, bump: 0.85, kerb: 1, h: 0.035 },
+  sausage: { mu: 0.78, drag: 0.06, bump: 2.2, kerb: 2, h: 0.125 },
+  astroturf: { mu: 0.88, drag: 0.02, bump: 0.25, kerb: 0, h: -0.005 },
+  runoff: { mu: 0.92, drag: 0, bump: 0, kerb: 0, h: -0.01 },
+  grass: { mu: 0.62, drag: 0.15, bump: 0.35, kerb: 0, h: -0.03 },
+  gravel: { mu: 0.56, drag: 0.6, bump: 0.8, kerb: 0, h: -0.03 },
 };
 // In the rain the road itself is covered by the wet tyre's mu; what gets relatively worse is
 // everything painted or off the road.
 export const SURF_WET = {
-  track: { mu: 1.0, drag: 0, bump: 0 },
-  kerb: { mu: 0.85, drag: 0, bump: 1 },
-  runoff: { mu: 0.86, drag: 0, bump: 0 },
-  grass: { mu: 0.5, drag: 0.16, bump: 0.35 },
-  gravel: { mu: 0.5, drag: 0.62, bump: 0.8 },
+  track: { mu: 1.0, drag: 0, bump: 0, kerb: 0, h: 0 },
+  kerbFlat: { mu: 0.88, drag: 0, bump: 0.65, kerb: 1, h: 0.02 },
+  kerb: { mu: 0.85, drag: 0, bump: 1, kerb: 1, h: 0.045 },
+  kerbHigh: { mu: 0.78, drag: 0, bump: 1.35, kerb: 1, h: 0.085 },
+  kerbExit: { mu: 0.80, drag: 0, bump: 0.85, kerb: 1, h: 0.035 },
+  sausage: { mu: 0.65, drag: 0.07, bump: 2.2, kerb: 2, h: 0.125 },
+  astroturf: { mu: 0.72, drag: 0.03, bump: 0.25, kerb: 0, h: -0.005 },
+  runoff: { mu: 0.86, drag: 0, bump: 0, kerb: 0, h: -0.01 },
+  grass: { mu: 0.5, drag: 0.16, bump: 0.35, kerb: 0, h: -0.03 },
+  gravel: { mu: 0.5, drag: 0.62, bump: 0.8, kerb: 0, h: -0.03 },
 };
 
 function enginePower(rpm, p) {
@@ -319,9 +329,10 @@ export class CarBody {
     const soft = (env.front.drag + env.rear.drag) * 0.5 * W * (0.22 + 0.78 * Math.min(1, vabs / 15));
     const rollRes = (p.roll * W + soft) * Math.tanh(vx * 2);
     const gradeF = -m * G * (env.grade || 0);
+    const camberF = env.camber ? -m * G * Math.sin(env.camber) : 0;
     let Fx = FxBf + rr.Fx - drag - rollRes + gradeF;
-    let Fy = FyBf + rr.Fy;
-    // bumpiness off-track
+    let Fy = FyBf + rr.Fy + camberF;
+    // bumpiness off-track and over raised/sausage kerbs
     const bump = (env.front.bump + env.rear.bump) * 0.5;
     if (bump > 0 && vabs > 3) Fy += (Math.random() - 0.5) * bump * 2500;
 
@@ -371,7 +382,7 @@ export class CarBody {
     // ride: total vertical load in g (1 at rest, ~4.5 flat out) and how hard the floor is being
     // pushed into the road (aero load, plus the nose diving under braking, plus kerbs)
     this.rideLoad = (Fzf + Fzr) / W;
-    this.bottoming = moving * clamp((this.rideLoad - 3.0) / 1.3 + 0.35 * clamp(-this.axS / 45, 0, 1) * clamp((this.rideLoad - 2) / 1.5, 0, 1) + (bump >= 1 ? 0.25 : 0), 0, 1);
+    this.bottoming = moving * clamp((this.rideLoad - 3.0) / 1.3 + 0.35 * clamp(-this.axS / 45, 0, 1) * clamp((this.rideLoad - 2) / 1.5, 0, 1) + (bump >= 1.5 ? 0.65 : bump >= 1 ? 0.25 : 0), 0, 1);
     this.understeer = moving * clamp((Math.abs(alphaF) - 0.125) / 0.06, 0, 1);
     this.oversteer = moving * clamp((Math.abs(alphaR) - 0.095) / 0.06, 0, 1);
 
@@ -507,6 +518,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
   // A less committed driver is not slower everywhere: corners the car takes easily flat-out stay
   // flat for anyone. `ease` is 1 where the ideal car has lots of grip in hand, 0 where it is on
   // the limit, and the driver's commitment (usage) only bites where the corner is actually hard.
+  const bankAt = (i) => (T.camber ? -G * Math.sin(T.camber[i]) * Math.sign(rl.kappa[i]) : 0);
   let ease = null;
   if (usage < 0.999) {
     const key = `_ideal:${p.profileKey ?? "f1/balanced"}:${gripMul}`;
@@ -515,7 +527,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
     for (let i = 0; i < N; i++) {
       const k = Math.abs(rl.kappa[i]);
       const den = k - p.mu * gripMul * cdf;
-      const vlatIdeal = den <= 0 ? 1e3 : Math.sqrt((p.mu * gripMul * G) / den);
+      const vlatIdeal = den <= 0 ? 1e3 : Math.sqrt(Math.max(1, p.mu * gripMul * G + bankAt(i)) / den);
       const e = (vlatIdeal / ideal.v[i] - 1.15) / 0.35;
       ease[i] = e < 0 ? 0 : e > 1 ? 1 : e;
     }
@@ -528,7 +540,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
     const k = Math.abs(rl.kappa[i]);
     const mu = muAt(i);
     const den = k - mu * cdf;
-    vlat[i] = den <= 0 ? vTop : Math.min(vTop, Math.sqrt((mu * G) / den));
+    vlat[i] = den <= 0 ? vTop : Math.min(vTop, Math.sqrt(Math.max(1, mu * G + bankAt(i)) / den));
   }
   const v = Float64Array.from(vlat);
   let i0 = 0;
@@ -537,7 +549,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
   for (let q = 0; q < 2 * N; q++) {
     const i = (i0 + q) % N, j = (i + 1) % N;
     const vi = v[i], mu = muAt(i);
-    const lat = vi * vi * Math.abs(rl.kappa[i]);
+    const lat = Math.max(0, vi * vi * Math.abs(rl.kappa[i]) - bankAt(i));
     const ratio = Math.min(1, lat / (mu * (G + cdf * vi * vi)));
     const grip = Math.sqrt(1 - ratio * ratio);
     const gTop = p.gears.find((g) => g > vi) ?? vTop;
@@ -552,7 +564,7 @@ export function computeProfile(T, rl, p = CAR, usage = 0.97, gripMul = 1, brakeS
   for (let q = 0; q < 2 * N; q++) {
     const j = (i0 - q + 4 * N) % N, i = (j - 1 + N) % N;
     const vj = v[j], mu = muAt(j);
-    const lat = vj * vj * Math.abs(rl.kappa[j]);
+    const lat = Math.max(0, vj * vj * Math.abs(rl.kappa[j]) - bankAt(j));
     const ratio = Math.min(1, lat / (mu * (G + cdf * vj * vj)));
     const grip = Math.sqrt(1 - ratio * ratio);
     const aB = Math.min(mu * (G + cdf * vj * vj) * grip, p.brakeForce / p.mass) * brakeScale + cdd * vj * vj + G * T.grade[j];

@@ -6,9 +6,18 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as TX from './textures.js';
 import { buildWeather } from './weather.js';
 import { treeTexture, treeGeometry, crowdTexture, cloudTexture } from './nature.js';
+import { buildSpaLandmarks } from './spa_landmarks.js';
 import * as DT from './detail.js';
 
 const V = (x, y, h) => new THREE.Vector3(x, h, -y);
+
+function camberY(T, i, d) {
+  const c = T.camber ? T.camber[i] : 0;
+  if (!c) return 0;
+  const lim = T.width / 2 + 2.5;
+  const dc = d < -lim ? -lim : d > lim ? lim : d;
+  return dc * Math.sin(c);
+}
 
 function ribbon(T, o) {
   const N = T.N;
@@ -21,7 +30,7 @@ function ribbon(T, o) {
     for (let k = 0; k <= cols; k++) {
       const t = k / cols;
       const d = d0 + (d1 - d0) * t;
-      const yo = o.y ? o.y(i, t, d) : 0;
+      const yo = (o.y ? o.y(i, t, d) : 0) + camberY(T, i, d);
       pos.push(T.x[i] + T.nx[i] * d, T.h[i] + yo, -(T.y[i] + T.ny[i] * d));
       uv.push(o.uScale ? (d * o.uScale) : t * (o.uRepeat ?? 1), (r * T.ds) / (o.vScale ?? 10));
       if (o.color) { const c = o.color(i, t, d); col.push(c[0], c[1], c[2]); }
@@ -99,6 +108,8 @@ const SCENERY = {
   alpine: { grass: [78, 108, 54], dry: 0.15, terrain: [70, 98, 50], hills: 95, kinds: ['pine', 'pine', 'oak', 'pine'], count: 6000, sea: false, town: false },
   // dry inland hills with umbrella pines and a low town skyline
   catalan: { grass: [104, 110, 60], dry: 0.8, terrain: [118, 112, 70], hills: 34, kinds: ['umbrella', 'oak', 'cypress', 'umbrella'], count: 3000, sea: false },
+  // lush Belgian Ardennes: towering dark spruces, pines, European beeches and deep wooded valleys
+  ardennes: { grass: [56, 86, 42], dry: 0.14, terrain: [46, 74, 35], hills: 110, kinds: ['spruce', 'spruce', 'pine', 'beech', 'oak'], count: 10500, sea: false, town: false, tightForest: true },
 };
 
 // tint: brightness/colour for unlit painted things (trees); cloud: [cover, r, g, b]
@@ -204,21 +215,89 @@ export function buildWorld(scene, renderer, T, opts) {
     const m = new THREE.Mesh(g, lineMat); m.receiveShadow = true; root.add(m);
   }
 
-  // kerbs
-  const kerbTex = TX.kerb();
+  // kerbs: supports standard kerbs plus multi-type 3D sculpted kerbs, tall stepped kerbs,
+  // chicane anti-cut sausage kerbs (baguettes), wide fluted exit kerbs and green astroturf strips.
+  const [kc1, kc2] = T.def.kerbColors || ['#b81a1f', '#dcdcd8'];
+  const kerbTex = TX.kerb(kc1, kc2, false);
   const kerbMat = new THREE.MeshStandardMaterial({ map: kerbTex, roughness: 0.55 });
+  const hasMultiKerb = T.kerbL.some((v) => v > 1) || T.kerbR.some((v) => v > 1);
+  const kerbStepMat = hasMultiKerb ? new THREE.MeshStandardMaterial({ map: TX.kerb(kc1, kc2, true), roughness: 0.52 }) : null;
+  const sausageMat = hasMultiKerb ? new THREE.MeshStandardMaterial({ map: TX.sausageKerb(), roughness: 0.48 }) : null;
+  const astroMat = hasMultiKerb ? new THREE.MeshStandardMaterial({ map: TX.astroturf(), roughness: 0.92 }) : null;
   for (const side of [1, -1]) {
     const flags = side === 1 ? T.kerbL : T.kerbR;
-    const g = ribbon(T, {
-      d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.4), cols: 3, vScale: 2.2, uRepeat: 1,
-      y: (i, t) => 0.02 + Math.sin(t * Math.PI) * 0.05 + t * 0.02,
-      mask: (i) => flags[i],
-    });
-    const m = new THREE.Mesh(g, kerbMat); m.receiveShadow = true; root.add(m);
+    const addKerb = (g, mat, cast = false) => {
+      if (!g.index.count) return;
+      const m = new THREE.Mesh(g, mat); m.receiveShadow = true; m.castShadow = cast; root.add(m);
+    };
+    if (!hasMultiKerb) {
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.4), cols: 3, vScale: 2.2, uRepeat: 1,
+        y: (i, t) => 0.02 + Math.sin(t * Math.PI) * 0.05 + t * 0.02,
+        mask: (i) => flags[i],
+      }), kerbMat);
+    } else {
+      // Type 1: standard sawtooth FIA apex kerb
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.4), cols: 4, vScale: 2.2, uRepeat: 1,
+        y: (i, t) => 0.015 + Math.sin(t * Math.PI) * 0.045 + t * 0.018 + (t > 0.15 && t < 0.85 ? 0.008 * Math.sin(i * 1.57) : 0),
+        mask: (i) => flags[i] === 1,
+      }), kerbMat, true);
+      // Type 2: tall double-stepped high-load kerb (Eau Rouge / Raidillon / Pouhon T11 / Blanchimont) + green verge
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.55), cols: 5, vScale: 2.0, uRepeat: 1,
+        y: (i, t) => {
+          const base = t <= 0.45 ? 0.018 + t * 0.12 : t <= 0.85 ? 0.072 + (t - 0.45) * 0.085 : 0.106 * (1 - (t - 0.85) / 0.15);
+          return base + (t > 0.15 && t < 0.85 ? 0.009 * Math.sin(i * 1.57) : 0);
+        },
+        mask: (i) => flags[i] === 2,
+      }), kerbStepMat, true);
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 + 1.52), d1: () => side * (w2 + 2.68), uScale: 1 / 2.2, vScale: 3.5,
+        y: () => -0.004,
+        mask: (i) => flags[i] === 2,
+      }), astroMat);
+      // Type 3: chicane apex kerb + 3D raised yellow/amber anti-cut sausage mound (baguette)
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.25), cols: 4, vScale: 1.9, uRepeat: 1,
+        y: (i, t) => 0.016 + Math.sin(t * Math.PI) * 0.048 + t * 0.015,
+        mask: (i) => flags[i] === 3,
+      }), kerbStepMat, true);
+      const sTaper = (i) => {
+        const p = flags[(i - 1 + N) % N] === 3, n = flags[(i + 1) % N] === 3;
+        if (!p || !n) return 0;
+        const p2 = flags[(i - 2 + N) % N] === 3, n2 = flags[(i + 2) % N] === 3;
+        return p2 && n2 ? 1 : 0.55;
+      };
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 + 1.32), d1: () => side * (w2 + 2.28), cols: 6, vScale: 2.6, uRepeat: 1,
+        y: (i, t) => 0.008 + Math.sin(t * Math.PI) * 0.165 * sTaper(i),
+        mask: (i) => flags[i] === 3,
+      }), sausageMat, true);
+      // Type 4: wide fluted exit kerb + dark-green astroturf strip
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 2.1), cols: 4, vScale: 2.4, uRepeat: 1,
+        y: (i, t) => 0.014 + Math.sin(t * Math.PI) * 0.032 + (t > 0.12 && t < 0.88 ? 0.006 * Math.sin(i * 1.57) : 0),
+        mask: (i) => flags[i] === 4,
+      }), kerbMat);
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 + 2.06), d1: () => side * (w2 + 3.65), uScale: 1 / 2.2, vScale: 3.5,
+        y: () => -0.004,
+        mask: (i) => flags[i] === 4,
+      }), astroMat);
+      // Type 5: low-profile flush entry turn-in kerb
+      addKerb(ribbon(T, {
+        d0: () => side * (w2 - 0.05), d1: () => side * (w2 + 1.12), cols: 3, vScale: 2.2, uRepeat: 1,
+        y: (i, t) => 0.01 + Math.sin(t * Math.PI) * 0.016,
+        mask: (i) => flags[i] === 5,
+      }), kerbMat);
+    }
   }
 
-  // verges: asphalt strip, paved runoff, gravel traps, grass
+  // verges: asphalt strip, paved runoff (plain or Spa red/yellow striped), gravel traps, grass
   const runMat = DT.applyMacro(new THREE.MeshStandardMaterial({ map: asp.map, color: 0xb9bcc0, roughness: 0.95 }), { scale: 0.3, amount: 0.22 });
+  const hasStriped = T.runoffL.some((v) => v >= 2) || T.runoffR.some((v) => v >= 2);
+  const stripedMat = hasStriped ? new THREE.MeshStandardMaterial({ map: TX.spaRunoff(), roughness: 0.88 }) : null;
   const gv = TX.gravel();
   gv.map.repeat.set(1, 1);
   const gravelMat = new THREE.MeshStandardMaterial({ map: gv.map, normalMap: gv.normal, roughness: 1 });
@@ -229,11 +308,17 @@ export function buildWorld(scene, renderer, T, opts) {
     const kerbF = side === 1 ? T.kerbL : T.kerbR;
     const ro = side === 1 ? T.runoffL : T.runoffR;
     const wall = side === 1 ? T.wallL : T.wallR;
-    const add = (g, mat) => { const m = new THREE.Mesh(g, mat); m.receiveShadow = true; root.add(m); };
+    const add = (g, mat) => { if (!g.index.count) return; const m = new THREE.Mesh(g, mat); m.receiveShadow = true; root.add(m); };
     add(ribbon(T, { d0: () => side * (w2 + 0.1), d1: () => side * (w2 + 1.4), mask: (i) => !kerbF[i], uScale: 1 / 7, vScale: 7, y: () => -0.005 }), runMat);
-    add(ribbon(T, { d0: () => side * (w2 + 1.4), d1: (i) => side * Math.min(wall[i], w2 + 9), mask: (i) => ro[i], uScale: 1 / 7, vScale: 7, y: () => -0.01 }), runMat);
-    add(ribbon(T, { d0: () => side * (w2 + 2.6), d1: () => side * (w2 + 3.2), mask: (i) => ro[i], y: () => 0.0 }), blueMat);
-    add(ribbon(T, { d0: () => side * (w2 + 9), d1: (i) => side * (wall[i] - 0.1), mask: (i) => ro[i] && wall[i] > w2 + 9.5, uScale: 1 / 4, vScale: 4, y: () => -0.03 }), gravelMat);
+    add(ribbon(T, { d0: () => side * (w2 + 1.4), d1: (i) => side * Math.min(wall[i], w2 + 9), mask: (i) => ro[i] === 1, uScale: 1 / 7, vScale: 7, y: () => -0.01 }), runMat);
+    add(ribbon(T, { d0: () => side * (w2 + 2.6), d1: () => side * (w2 + 3.2), mask: (i) => ro[i] === 1 && !hasMultiKerb, y: () => 0.0 }), blueMat);
+    if (hasStriped) {
+      // style 2: iconic Spa red/yellow striped high-friction tarmac + gravel behind
+      add(ribbon(T, { d0: () => side * (w2 + 1.4), d1: (i) => side * Math.min(wall[i], w2 + 9), mask: (i) => ro[i] === 2, uScale: 1 / 8, vScale: 8, y: () => -0.01 }), stripedMat);
+      // style 3: wide red/yellow striped paved escape runoff all the way to the barrier
+      add(ribbon(T, { d0: () => side * (w2 + 1.4), d1: (i) => side * (wall[i] - 0.1), mask: (i) => ro[i] === 3, uScale: 1 / 8, vScale: 8, y: () => -0.01 }), stripedMat);
+    }
+    add(ribbon(T, { d0: () => side * (w2 + 9), d1: (i) => side * (wall[i] - 0.1), mask: (i) => (ro[i] === 1 || ro[i] === 2) && wall[i] > w2 + 9.5, uScale: 1 / 4, vScale: 4, y: () => -0.03 }), gravelMat);
     add(ribbon(T, { d0: () => side * (w2 + 1.4), d1: (i) => side * (wall[i] + 0.5), mask: (i) => !ro[i], uScale: 1 / 20, vScale: 14, y: (i, t) => -0.03 - t * 0.05 }), vergeMat);
   }
 
@@ -267,6 +352,8 @@ export function buildWorld(scene, renderer, T, opts) {
   const adTex = DT.banners();
   const adMat = new THREE.MeshStandardMaterial({ map: adTex, color: 0xd2d2d2, roughness: 0.55, side: THREE.DoubleSide });
   const barrierMat = new THREE.MeshStandardMaterial({ map: DT.barrier(), roughness: 0.92, side: THREE.DoubleSide });
+  const hasArmco = (T.armcoL && T.armcoL.some(Boolean)) || (T.armcoR && T.armcoR.some(Boolean));
+  const armcoMat = hasArmco ? new THREE.MeshStandardMaterial({ map: TX.armco(), roughness: 0.42, metalness: 0.65, side: THREE.DoubleSide }) : null;
   const adZone = (i) => { const s = i * T.ds; return s < 420 || s > T.length - 330 || hash2(Math.floor(s / 84), 3.7) < 0.4; };
   const contactMat = new THREE.MeshBasicMaterial({ map: DT.contactStrip(), color: 0x000000, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const topMat = new THREE.MeshStandardMaterial({ map: TX.concrete(), roughness: 0.9 });
@@ -275,11 +362,17 @@ export function buildWorld(scene, renderer, T, opts) {
   const postGeos = [];
   for (const side of [1, -1]) {
     const wall = side === 1 ? T.wallL : T.wallR;
-    // vertical wall face
-    const wf = ribbonWall(T, (i) => side * wall[i], 0, 1.05, side === 1 ? 60 : -60, 1, adZone);
-    root.add(Object.assign(new THREE.Mesh(wf, adMat), { castShadow: true, receiveShadow: true }));
-    const wc = ribbonWall(T, (i) => side * wall[i], 0, 1.05, side === 1 ? 8 : -8, 1, (i) => !adZone(i));
-    root.add(Object.assign(new THREE.Mesh(wc, barrierMat), { castShadow: true, receiveShadow: true }));
+    const arm = side === 1 ? T.armcoL : T.armcoR;
+    const isArmco = (i) => hasArmco && arm[i] && !(T.pit && T.pit.zone[i] && side === T.pit.side);
+    // vertical wall face: galvanized Armco along forest corridors, sponsor boards & concrete elsewhere
+    if (hasArmco) {
+      const wa = ribbonWall(T, (i) => side * wall[i], 0, 1.05, side === 1 ? 4.5 : -4.5, 1, isArmco);
+      if (wa.index.count) root.add(Object.assign(new THREE.Mesh(wa, armcoMat), { castShadow: true, receiveShadow: true }));
+    }
+    const wf = ribbonWall(T, (i) => side * wall[i], 0, 1.05, side === 1 ? 60 : -60, 1, (i) => !isArmco(i) && adZone(i));
+    if (wf.index.count) root.add(Object.assign(new THREE.Mesh(wf, adMat), { castShadow: true, receiveShadow: true }));
+    const wc = ribbonWall(T, (i) => side * wall[i], 0, 1.05, side === 1 ? 8 : -8, 1, (i) => !isArmco(i) && !adZone(i));
+    if (wc.index.count) root.add(Object.assign(new THREE.Mesh(wc, barrierMat), { castShadow: true, receiveShadow: true }));
     // soft contact shadow where the barrier meets the ground
     const cs = ribbon(T, { d0: (i) => side * (wall[i] - 0.02), d1: (i) => side * (wall[i] - 1.5), y: () => 0.012 });
     root.add(Object.assign(new THREE.Mesh(cs, contactMat), { renderOrder: 1 }));
@@ -292,7 +385,7 @@ export function buildWorld(scene, renderer, T, opts) {
     root.add(Object.assign(new THREE.Mesh(ff, fenceMat), { renderOrder: 3, userData: { noAO: true } }));
     for (let i = 0; i < N; i += 5) {
       const d = side * (wall[i] + 0.3);
-      const p = V(T.x[i] + T.nx[i] * d, T.y[i] + T.ny[i] * d, T.h[i]);
+      const p = V(T.x[i] + T.nx[i] * d, T.y[i] + T.ny[i] * d, T.h[i] + camberY(T, i, d));
       const g = new THREE.CylinderGeometry(0.06, 0.06, 4.3, 5); g.translate(p.x, p.y + 2.15, p.z); postGeos.push(g);
     }
   }
@@ -392,22 +485,121 @@ export function buildWorld(scene, renderer, T, opts) {
     root.add(water);
   }
 
-  // ---------- trees: painted cross-billboards (alpha-tested, cast real shadows)
+  // ---------- grandstands (start straight + slowest corners or circuit-defined stands),
+  // circuit landmarks, then trees (skipping all grandstands, pit buildings and landmarks)
   let seed = 12345;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const standMat = new THREE.MeshStandardMaterial({ color: 0xb8bec6, roughness: 0.7, metalness: 0.2 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.5, metalness: 0.3 });
+  const crowdTex = crowdTexture(16);
+  const crowdMat = new THREE.MeshStandardMaterial({ map: crowdTex, roughness: 1 });
+  const stands = [];
+  const prof = opts.profile;
+  if (T.def.stands) {
+    for (const s of T.def.stands) {
+      stands.push({ i: Math.round((((s.m % T.length) + T.length) % T.length) / T.ds) % N, side: s.side, len: s.len });
+    }
+  } else {
+    const pitSide = T.pit ? T.pit.side : T.runoffL[0] ? -1 : (T.wallL[0] <= T.wallR[0] ? 1 : -1);
+    stands.push({ i: 0, side: -pitSide, len: 260 });
+    // slow corners
+    if (prof) {
+      const mins = [];
+      for (let i = 0; i < N; i++) {
+        const v = prof[i];
+        let isMin = true;
+        for (let q2 = -40; q2 <= 40; q2 += 4) if (prof[(i + q2 + N) % N] < v) { isMin = false; break; }
+        if (isMin && v < 45) mins.push({ i, v });
+      }
+      mins.sort((a, b) => a.v - b.v);
+      for (const m of mins.slice(0, 3)) {
+        const side = -Math.sign(T.kappa[m.i]) || 1;
+        if (stands.some((s) => Math.min(Math.abs(s.i - m.i), N - Math.abs(s.i - m.i)) < 80)) continue;
+        stands.push({ i: m.i, side, len: 140 });
+      }
+    }
+  }
+  const treeClear = []; // { x, y, r } in sim coords so trees never clip into buildings or stands
+  for (const st of stands) {
+    const wall = st.side === 1 ? T.wallL : T.wallR;
+    const g = new THREE.Group();
+    const i = st.i;
+    const rows = 16, rowD = 0.85, rowH = 0.48;
+    const base = wall[i] + 6;
+    const wx = T.x[i] + T.nx[i] * st.side * base, wy = T.y[i] + T.ny[i] * st.side * base;
+    const pos0 = V(wx, wy, T.h[i]);
+    g.position.copy(pos0);
+    g.rotation.y = Math.atan2(T.ty[i], T.tx[i]);
+    // local: x along track, z positive away from track if side=-1... compute outward direction sign in local z
+    const out = st.side === 1 ? -1 : 1; // sim left maps to three -z
+    const depth = rows * rowD, y0 = 1.4, y1 = y0 + rows * rowH;
+    {
+      // raked seating deck
+      const dg = new THREE.BufferGeometry();
+      const L = st.len / 2;
+      dg.setAttribute('position', new THREE.Float32BufferAttribute([-L, y0, 0, L, y0, 0, L, y1, out * depth, -L, y1, out * depth], 3));
+      const ur = st.len / 16.5;
+      dg.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, ur, 0, ur, 1, 0, 1], 2));
+      dg.setIndex(out > 0 ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]);
+      dg.computeVertexNormals();
+      const deck = new THREE.Mesh(dg, crowdMat); deck.receiveShadow = true; g.add(deck);
+      if (T.def.stands) {
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(st.len, 8, depth + 0.6), standMat);
+        plinth.position.set(0, -4, out * (depth / 2)); g.add(plinth);
+      }
+      const front = new THREE.Mesh(new THREE.BoxGeometry(st.len, y0, 0.3), standMat); front.position.set(0, y0 / 2, out * 0.1); g.add(front);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(st.len, y1 + 1.2, 0.4), standMat); back.position.set(0, (y1 + 1.2) / 2, out * (depth + 0.2)); back.castShadow = true; g.add(back);
+      for (const sx of [-1, 1]) {
+        const sg = new THREE.BufferGeometry();
+        sg.setAttribute('position', new THREE.Float32BufferAttribute([sx * L, 0, 0, sx * L, y0, 0, sx * L, y1, out * depth, sx * L, 0, out * depth], 3));
+        sg.setIndex([0, 1, 2, 0, 2, 3]); sg.computeVertexNormals();
+        const sm = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.8, side: THREE.DoubleSide })); g.add(sm);
+      }
+      for (let s = -L - 8; s <= L + 8; s += 20) {
+        treeClear.push({ x: wx + T.tx[i] * s + T.nx[i] * st.side * (depth * 0.5), y: wy + T.ty[i] * s + T.ny[i] * st.side * (depth * 0.5), r: 16 });
+      }
+    }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(st.len + 4, 0.3, rows * rowD + 3), roofMat);
+    roof.position.set(0, rows * rowH + 6.2, out * (rows * rowD) / 2);
+    roof.rotation.x = out * 0.06;
+    roof.castShadow = true;
+    g.add(roof);
+    for (let k = -st.len / 2 + 5; k <= st.len / 2 - 5; k += 20) {
+      const col = new THREE.Mesh(new THREE.BoxGeometry(0.4, rows * rowH + 5, 0.4), standMat);
+      col.position.set(k, (rows * rowH + 5) / 2, out * rows * rowD);
+      g.add(col);
+    }
+    root.add(g);
+  }
+  if (T.id === 'spa') {
+    const lm = buildSpaLandmarks(root, T, { crowdMat, standMat, roofMat });
+    treeClear.push(...lm.clearZones);
+  }
+
+  // ---------- trees: painted cross-billboards (alpha-tested, cast real shadows)
   {
     const kinds = [...new Set(sc.kinds)];
     const spots = Object.fromEntries(kinds.map((k) => [k, []]));
     let placed = 0, tries = 0;
-    const dense = sc.kinds[0] === 'pine';
+    const dense = sc.kinds[0] === 'pine' || sc.tightForest;
+    const edgePad = sc.tightForest ? 5.5 : 9;
+    const clumpMin = sc.tightForest ? 0.25 : dense ? 0.36 : 0.47;
+    const clearBlocked = (x, y) => {
+      for (let k = 0; k < treeClear.length; k++) {
+        const z = treeClear[k];
+        if ((x - z.x) ** 2 + (y - z.y) ** 2 < z.r * z.r) return true;
+      }
+      return false;
+    };
     while (placed < sc.count && tries < sc.count * 30) {
       tries++;
       const x = X0 + 200 + rnd() * (X1 - X0 - 400), y = Y0 + 200 + rnd() * (Y1 - Y0 - 400);
       const r = heightAt(x, y);
-      if (r.dist < r.wl + 9) continue;
+      if (r.dist < r.wl + edgePad) continue;
       if (!dense && r.dist > 500 && rnd() < 0.85) continue;
       if (sc.sea && r.h < seaLevel + 3) continue;
-      if (fbm(x * 0.006 + 7, y * 0.006) < (dense ? 0.36 : 0.47)) continue; // clumps and clearings
+      if (fbm(x * 0.006 + 7, y * 0.006) < clumpMin) continue; // clumps and clearings
+      if (treeClear.length && clearBlocked(x, y)) continue;
       const kind = sc.kinds[Math.floor(rnd() * sc.kinds.length)];
       spots[kind].push([x, r.h - 0.25, -y, 0.7 + rnd() * 0.75, rnd() * Math.PI]);
       placed++;
@@ -430,75 +622,6 @@ export function buildWorld(scene, renderer, T, opts) {
       mesh.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: tt.map, alphaTest: 0.42 });
       root.add(mesh);
     }
-  }
-
-  // ---------- grandstands (start straight + slowest corners), pit building, gantry, bridge
-  const standMat = new THREE.MeshStandardMaterial({ color: 0xb8bec6, roughness: 0.7, metalness: 0.2 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.5, metalness: 0.3 });
-  const crowdTex = crowdTexture(16);
-  const crowdMat = new THREE.MeshStandardMaterial({ map: crowdTex, roughness: 1 });
-  const stands = [];
-  const pitSide = T.pit ? T.pit.side : T.runoffL[0] ? -1 : (T.wallL[0] <= T.wallR[0] ? 1 : -1);
-  stands.push({ i: 0, side: -pitSide, len: 260 });
-  // slow corners
-  const prof = opts.profile;
-  if (prof) {
-    const mins = [];
-    for (let i = 0; i < N; i++) {
-      const v = prof[i];
-      let isMin = true;
-      for (let q2 = -40; q2 <= 40; q2 += 4) if (prof[(i + q2 + N) % N] < v) { isMin = false; break; }
-      if (isMin && v < 45) mins.push({ i, v });
-    }
-    mins.sort((a, b) => a.v - b.v);
-    for (const m of mins.slice(0, 3)) {
-      const side = -Math.sign(T.kappa[m.i]) || 1;
-      if (stands.some((s) => Math.min(Math.abs(s.i - m.i), N - Math.abs(s.i - m.i)) < 80)) continue;
-      stands.push({ i: m.i, side, len: 140 });
-    }
-  }
-  for (const st of stands) {
-    const wall = st.side === 1 ? T.wallL : T.wallR;
-    const g = new THREE.Group();
-    const i = st.i;
-    const rows = 16, rowD = 0.85, rowH = 0.48;
-    const base = wall[i] + 6;
-    const pos0 = V(T.x[i] + T.nx[i] * st.side * base, T.y[i] + T.ny[i] * st.side * base, T.h[i]);
-    g.position.copy(pos0);
-    g.rotation.y = Math.atan2(T.ty[i], T.tx[i]);
-    // local: x along track, z positive away from track if side=-1... compute outward direction sign in local z
-    const out = st.side === 1 ? -1 : 1; // sim left maps to three -z
-    const depth = rows * rowD, y0 = 1.4, y1 = y0 + rows * rowH;
-    {
-      // raked seating deck
-      const dg = new THREE.BufferGeometry();
-      const L = st.len / 2;
-      dg.setAttribute('position', new THREE.Float32BufferAttribute([-L, y0, 0, L, y0, 0, L, y1, out * depth, -L, y1, out * depth], 3));
-      const ur = st.len / 16.5;
-      dg.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, ur, 0, ur, 1, 0, 1], 2));
-      dg.setIndex(out > 0 ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]);
-      dg.computeVertexNormals();
-      const deck = new THREE.Mesh(dg, crowdMat); deck.receiveShadow = true; g.add(deck);
-      const front = new THREE.Mesh(new THREE.BoxGeometry(st.len, y0, 0.3), standMat); front.position.set(0, y0 / 2, out * 0.1); g.add(front);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(st.len, y1 + 1.2, 0.4), standMat); back.position.set(0, (y1 + 1.2) / 2, out * (depth + 0.2)); back.castShadow = true; g.add(back);
-      for (const sx of [-1, 1]) {
-        const sg = new THREE.BufferGeometry();
-        sg.setAttribute('position', new THREE.Float32BufferAttribute([sx * L, 0, 0, sx * L, y0, 0, sx * L, y1, out * depth, sx * L, 0, out * depth], 3));
-        sg.setIndex([0, 1, 2, 0, 2, 3]); sg.computeVertexNormals();
-        const sm = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.8, side: THREE.DoubleSide })); g.add(sm);
-      }
-    }
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(st.len + 4, 0.3, rows * rowD + 3), roofMat);
-    roof.position.set(0, rows * rowH + 6.2, out * (rows * rowD) / 2);
-    roof.rotation.x = out * 0.06;
-    roof.castShadow = true;
-    g.add(roof);
-    for (let k = -st.len / 2 + 5; k <= st.len / 2 - 5; k += 20) {
-      const col = new THREE.Mesh(new THREE.BoxGeometry(0.4, rows * rowH + 5, 0.4), standMat);
-      col.position.set(k, (rows * rowH + 5) / 2, out * rows * rowD);
-      g.add(col);
-    }
-    root.add(g);
   }
 
   // (the pit lane, garages and pit building are built in pitlane.js)
@@ -534,8 +657,8 @@ export function buildWorld(scene, renderer, T, opts) {
     root.add(gantry);
   }
 
-  // sponsor bridge over the second DRS straight (or mid-lap)
-  {
+  // sponsor bridge over the second DRS straight (or mid-lap); Spa places its own landmarks
+  if (T.id !== 'spa') {
     const z = T.drs[1] || T.drs[0];
     const i = z ? Math.floor((z.start + (z.end > z.start ? z.end : z.end + N)) / 2) % N : Math.floor(N / 2);
     const g = new THREE.Group();
@@ -576,7 +699,7 @@ export function buildWorld(scene, renderer, T, opts) {
         const wall = side === 1 ? T.wallL : T.wallR;
         const d = side * (Math.min(wall[k], w2 + 8) - 1.2);
         const board = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), new THREE.MeshStandardMaterial({ map: bmats[m], roughness: 0.6, side: THREE.DoubleSide }));
-        board.position.copy(V(T.x[k] + T.nx[k] * d, T.y[k] + T.ny[k] * d, T.h[k] + 1.4));
+        board.position.copy(V(T.x[k] + T.nx[k] * d, T.y[k] + T.ny[k] * d, T.h[k] + camberY(T, k, d) + 1.4));
         board.rotation.y = Math.atan2(T.ty[k], T.tx[k]) - Math.PI / 2;
         const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.4, 5), standMat);
         leg.position.copy(board.position); leg.position.y -= 0.9;
@@ -618,8 +741,8 @@ export function buildWorld(scene, renderer, T, opts) {
         const react = Math.round((v * 0.3) / T.ds);
         for (let k = 0; k < COUNT; k++) {
           const j = (base + k * STEP) % N, j2 = (j + 1) % N;
-          pp.set(T.rl.x[j], T.h[j] + 0.045, -T.rl.y[j]);
-          ee.set(0, Math.atan2(T.rl.y[j2] - T.rl.y[j], T.rl.x[j2] - T.rl.x[j]), Math.atan(T.grade[j]));
+          pp.set(T.rl.x[j], T.h[j] + camberY(T, j, T.rl.alpha[j]) + 0.045, -T.rl.y[j]);
+          ee.set(T.camber ? T.camber[j] : 0, Math.atan2(T.rl.y[j2] - T.rl.y[j], T.rl.x[j2] - T.rl.x[j]), Math.atan(T.grade[j]));
           const fade = k > COUNT - 16 ? (COUNT - k) / 16 : 1;
           ss.set(0.95 * fade + 0.001, 1, 0.72 * fade + 0.001);
           mm.compose(pp, qq.setFromEuler(ee), ss);
@@ -706,7 +829,7 @@ export function buildWorld(scene, renderer, T, opts) {
   return {
     root, sun, sky, gantry, line, envRT, hemi,
     // road-type materials, for weather.js to soak when it rains
-    surfaces: { track: trackMat, run: runMat, kerb: kerbMat, line: lineMat, gravel: gravelMat, verge: vergeMat },
+    surfaces: { track: trackMat, run: runMat, kerb: kerbMat, kerbStep: kerbStepMat, sausage: sausageMat, astroturf: astroMat, striped: stripedMat, line: lineMat, gravel: gravelMat, verge: vergeMat },
     weather: null,
     // call once everything else has been added under root (pit lane, markers): opts { wet, effects }
     startWeather(opts) { this.weather = buildWeather(scene, this, T, opts); return this.weather; },
@@ -745,7 +868,8 @@ function ribbonWall(T, dFn, y0, y1, uLen, vRepeat = 1, mask = null) {
       const ip = (r - 1) % N, dp = dFn(ip);
       s += Math.hypot(x - (T.x[ip] + T.nx[ip] * dp), y - (T.y[ip] + T.ny[ip] * dp));
     }
-    pos.push(x, T.h[i] + y0, -y, x, T.h[i] + y1, -y);
+    const cy = camberY(T, i, d);
+    pos.push(x, T.h[i] + cy + y0, -y, x, T.h[i] + cy + y1, -y);
     uv.push(s / uLen, 0, s / uLen, vRepeat === 1 ? 1 : (y1 - y0) / uLen);
   }
   for (let r = 0; r < N; r++) {

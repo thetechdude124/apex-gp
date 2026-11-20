@@ -176,17 +176,176 @@ export function sand() {
   return tex(c);
 }
 
-export function kerb(c1 = '#b81a1f', c2 = '#dcdcd8') {
-  const [c, g] = canvas(64, 256);
-  g.fillStyle = c1; g.fillRect(0, 0, 64, 128);
-  g.fillStyle = c2; g.fillRect(0, 128, 64, 128);
-  // subtle grime + edge
-  for (let i = 0; i < 1500; i++) {
-    g.fillStyle = `rgba(0,0,0,${Math.random() * 0.12})`;
-    g.fillRect(Math.random() * 64, Math.random() * 256, 2, 2);
+export function kerb(c1 = '#b81a1f', c2 = '#dcdcd8', stepped = false) {
+  const [c, g] = canvas(128, 256);
+  let seed = stepped ? 73 : 29;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  g.fillStyle = c1; g.fillRect(0, 0, 128, 128);
+  g.fillStyle = c2; g.fillRect(0, 128, 128, 128);
+  // recessed sawtooth rib shading & block joints
+  g.fillStyle = 'rgba(0,0,0,0.28)';
+  g.fillRect(0, 0, 128, 5);
+  g.fillRect(0, 126, 128, 5);
+  g.fillStyle = 'rgba(255,255,255,0.16)';
+  g.fillRect(0, 5, 128, 3);
+  g.fillRect(0, 131, 128, 3);
+  if (stepped) {
+    // double-stepped aggressive kerb: dark bevel shadow along inner and mid lip + drainage flutes
+    const grd = g.createLinearGradient(0, 0, 128, 0);
+    grd.addColorStop(0, 'rgba(0,0,0,0.34)'); grd.addColorStop(0.14, 'rgba(255,255,255,0.12)');
+    grd.addColorStop(0.52, 'rgba(0,0,0,0.22)'); grd.addColorStop(0.62, 'rgba(255,255,255,0.14)');
+    grd.addColorStop(0.92, 'rgba(0,0,0,0.28)'); grd.addColorStop(1, 'rgba(0,0,0,0.48)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 256);
+    for (let y = 12; y < 256; y += 32) {
+      g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(8, y, 112, 6);
+      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(8, y + 6, 112, 2);
+    }
+  } else {
+    g.fillStyle = 'rgba(0,0,0,0.24)'; g.fillRect(0, 0, 7, 256);
+    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(118, 0, 10, 256);
+    for (let y = 20; y < 256; y += 64) {
+      g.fillStyle = 'rgba(0,0,0,0.14)'; g.fillRect(6, y, 112, 3);
+    }
   }
-  g.fillStyle = 'rgba(0,0,0,0.25)';
-  g.fillRect(0, 0, 4, 256);
+  // rubber scuffs & concrete grit from cars cutting apexes
+  for (let i = 0; i < 2400; i++) {
+    g.fillStyle = `rgba(0,0,0,${rnd() * 0.14})`;
+    g.fillRect(rnd() * 128, rnd() * 256, 2 + rnd() * 2, 2 + rnd() * 3);
+  }
+  for (let k = 0; k < 14; k++) {
+    g.fillStyle = `rgba(18,18,20,${0.09 + rnd() * 0.14})`;
+    g.fillRect(14 + rnd() * 76, rnd() * 220, 4 + rnd() * 14, 18 + rnd() * 55);
+  }
+  return tex(c);
+}
+
+// Raised anti-cut chicane "sausage" (baguette) kerb: bold amber-yellow with dark hazard ridges & scuffs
+export function sausageKerb() {
+  const [c, g] = canvas(128, 256);
+  let seed = 83;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const grd = g.createLinearGradient(0, 0, 128, 0);
+  grd.addColorStop(0, '#8a5d04'); grd.addColorStop(0.25, '#e8a80c');
+  grd.addColorStop(0.5, '#f6c921'); grd.addColorStop(0.75, '#e29e0a'); grd.addColorStop(1, '#7a5204');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 256);
+  // dark alternating bolt/rib sections along the sausage length
+  for (let y = 0; y < 256; y += 64) {
+    g.fillStyle = 'rgba(18,16,14,0.68)'; g.fillRect(0, y, 128, 12);
+    g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(0, y + 12, 128, 3);
+  }
+  for (let i = 0; i < 1200; i++) {
+    g.fillStyle = `rgba(15,15,15,${rnd() * 0.18})`;
+    g.fillRect(rnd() * 128, rnd() * 256, 2 + rnd() * 4, 2 + rnd() * 8);
+  }
+  return tex(c);
+}
+
+// Dark-emerald green painted verge / synthetic astroturf strip behind Spa exit kerbs
+export function astroturf() {
+  const S = 256;
+  const n = makeNoise(S, 4, 61);
+  const [c, g] = canvas(S, S);
+  const img = g.createImageData(S, S);
+  let seed = 67;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < S * S; i++) {
+    const v = 0.8 + n[i] * 0.28 + (rnd() - 0.5) * 0.14;
+    img.data[i * 4] = Math.min(255, 34 * v);
+    img.data[i * 4 + 1] = Math.min(255, 92 * v);
+    img.data[i * 4 + 2] = Math.min(255, 50 * v);
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  // fine synthetic turf drainage weave + tyre rubber dust
+  g.fillStyle = 'rgba(0,0,0,0.18)';
+  for (let y = 0; y < S; y += 8) g.fillRect(0, y, S, 1);
+  for (let k = 0; k < 24; k++) {
+    g.fillStyle = `rgba(16,18,16,${0.08 + rnd() * 0.12})`;
+    g.fillRect(rnd() * S, 0, 4 + rnd() * 14, S);
+  }
+  return tex(c);
+}
+
+// Iconic Spa-Francorchamps red & yellow painted high-friction tarmac runoff stripes
+export function spaRunoff() {
+  const S = 512;
+  const n = makeNoise(S, 5, 97);
+  const [c, g] = canvas(S, S);
+  let seed = 101;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // weathered dark tarmac base
+  g.fillStyle = '#383b40'; g.fillRect(0, 0, S, S);
+  // bold diagonal red & Belgian-yellow high-friction paint bands (tileable at 45 deg!)
+  const band = S / 4;
+  for (let k = -4; k <= 8; k++) {
+    g.fillStyle = k % 2 === 0 ? '#a81e24' : '#c9a21b';
+    g.beginPath();
+    g.moveTo(k * band, 0);
+    g.lineTo(k * band + band * 0.62, 0);
+    g.lineTo(k * band + band * 0.62 + S, S);
+    g.lineTo(k * band + S, S);
+    g.closePath();
+    g.fill();
+  }
+  // rough bitumen grit & dark tyre marks over the paint so it reads as painted asphalt, not plastic
+  const img = g.getImageData(0, 0, S, S);
+  for (let i = 0; i < S * S; i++) {
+    const gr = 0.72 + n[i] * 0.34 + (rnd() - 0.5) * 0.16;
+    img.data[i * 4] = Math.min(255, img.data[i * 4] * gr);
+    img.data[i * 4 + 1] = Math.min(255, img.data[i * 4 + 1] * gr);
+    img.data[i * 4 + 2] = Math.min(255, img.data[i * 4 + 2] * gr);
+  }
+  g.putImageData(img, 0, 0);
+  for (let k = 0; k < 40; k++) {
+    g.strokeStyle = `rgba(14,14,16,${0.08 + rnd() * 0.16})`;
+    g.lineWidth = 4 + rnd() * 8;
+    const x = rnd() * S;
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x + (rnd() - 0.5) * 40, S); g.stroke();
+  }
+  return tex(c);
+}
+
+// Galvanized steel double-beam Armco guardrail for classic Ardennes forest corridors
+export function armco() {
+  const W = 512, H = 128;
+  const [c, g] = canvas(W, H);
+  let seed = 131;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // dark shadow behind the rails + steel I-beam support posts
+  g.fillStyle = '#2d3136'; g.fillRect(0, 0, W, H);
+  for (let x = 24; x < W; x += 64) {
+    g.fillStyle = '#4e545c'; g.fillRect(x - 4, 0, 9, H);
+    g.fillStyle = '#26292e'; g.fillRect(x + 5, 0, 3, H);
+  }
+  // triple/double corrugated W-beam galvanized rails
+  const drawRail = (y0, h) => {
+    const grd = g.createLinearGradient(0, y0, 0, y0 + h);
+    grd.addColorStop(0.0, '#c8ced6');
+    grd.addColorStop(0.22, '#f0f3f7');
+    grd.addColorStop(0.45, '#7c848e');
+    grd.addColorStop(0.56, '#5a616b');
+    grd.addColorStop(0.76, '#dce1e8');
+    grd.addColorStop(1.0, '#6a717a');
+    g.fillStyle = grd; g.fillRect(0, y0, W, h);
+    // splice joints + bolts
+    for (let x = 0; x < W; x += 128) {
+      g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(x, y0, 3, h);
+      for (const by of [0.22, 0.78]) {
+        g.fillStyle = '#383d44'; g.beginPath(); g.arc(x + 9, y0 + h * by, 2.2, 0, 6.3); g.fill();
+      }
+    }
+  };
+  drawRail(6, 36);
+  drawRail(48, 36);
+  drawRail(90, 30);
+  // road grime & subtle scuffs
+  for (let i = 0; i < 60; i++) {
+    g.fillStyle = `rgba(25,22,18,${0.06 + rnd() * 0.14})`;
+    g.fillRect(rnd() * W, rnd() * H, 10 + rnd() * 50, 1 + rnd() * 3);
+  }
+  const grdB = g.createLinearGradient(0, H - 28, 0, H);
+  grdB.addColorStop(0, 'rgba(20,18,14,0)'); grdB.addColorStop(1, 'rgba(20,18,14,0.48)');
+  g.fillStyle = grdB; g.fillRect(0, H - 28, W, 28);
   return tex(c);
 }
 

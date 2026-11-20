@@ -215,10 +215,11 @@ export function buildTrack(def) {
     x, y,
     h: new Float64Array(N), tx: new Float64Array(N), ty: new Float64Array(N),
     nx: new Float64Array(N), ny: new Float64Array(N), kappa: new Float64Array(N),
-    grade: new Float64Array(N),
+    grade: new Float64Array(N), camber: new Float64Array(N),
     wallL: new Float64Array(N), wallR: new Float64Array(N),
-    runoffL: new Uint8Array(N), runoffR: new Uint8Array(N), // 0 grass, 1 asphalt+gravel
-    kerbL: new Uint8Array(N), kerbR: new Uint8Array(N),
+    runoffL: new Uint8Array(N), runoffR: new Uint8Array(N), // 0 grass, 1 asphalt+gravel, 2 striped+gravel, 3 striped paved
+    kerbL: new Uint8Array(N), kerbR: new Uint8Array(N),     // 0 none, 1 standard, 2 tall stepped, 3 chicane+sausage, 4 wide exit+turf, 5 flat entry
+    armcoL: new Uint8Array(N), armcoR: new Uint8Array(N),   // 1 galvanized Armco barrier instead of concrete
   };
 
   for (let i = 0; i < N; i++) {
@@ -237,37 +238,62 @@ export function buildTrack(def) {
   T.kappa = smoothClosed(kraw, 6);
   const ksm = smoothClosed(kraw, 60); // broad curvature for walls / kerbs
 
-  // elevation
+  // elevation & optional cross-slope camber
   const elev = def.elev ?? [[0, 0], [0.5, 0]];
   const h0 = new Float64Array(N);
   for (let i = 0; i < N; i++) h0[i] = periodicCatmull(elev, i / N);
-  T.h = smoothClosed(h0, 200);
+  T.h = smoothClosed(h0, def.elevSmooth ?? 200);
   for (let i = 0; i < N; i++) {
     const a = (i - 1 + N) % N, b = (i + 1) % N;
     T.grade[i] = (T.h[b] - T.h[a]) / (2 * ds);
   }
+  if (def.camber) {
+    const c0 = new Float64Array(N);
+    for (let i = 0; i < N; i++) c0[i] = periodicCatmull(def.camber, i / N) * DEG;
+    T.camber = smoothClosed(c0, 35);
+  }
+
+  // helper to paint a wrapped metre span onto a per-sample array
+  const paintSpan = (arr, startM, endM, val) => {
+    const i0 = Math.round(startM / ds), i1 = Math.round(endM / ds);
+    for (let q = i0; q <= i1; q++) arr[((q % N) + N) % N] = val;
+  };
 
   // walls + runoff
   const w2 = T.width / 2;
   const base = def.wallBase ?? w2 + 9;
   const runoff = def.runoff ?? w2 + 26;
-  const before = Math.round(30 / ds), after = Math.round(120 / ds);
-  for (let i = 0; i < N; i++) {
-    let kmax = 0, kmin = 0;
-    for (let q = -before; q <= after; q++) {
-      const k = ksm[(i + q + N) % N];
-      if (k > kmax) kmax = k;
-      if (k < kmin) kmin = k;
+  if (def.runoffZones) {
+    T.wallL.fill(base);
+    T.wallR.fill(base);
+    for (const [side, s0, s1, style, wDist] of def.runoffZones) {
+      paintSpan(side === 1 ? T.runoffL : T.runoffR, s0, s1, style);
+      paintSpan(side === 1 ? T.wallL : T.wallR, s0, s1, wDist ?? runoff);
     }
-    // outside of a left turn (k>0) is the right side
-    T.runoffR[i] = kmax > 1 / 320 ? 1 : 0;
-    T.runoffL[i] = kmin < -1 / 320 ? 1 : 0;
-    T.wallR[i] = T.runoffR[i] ? runoff : base;
-    T.wallL[i] = T.runoffL[i] ? runoff : base;
-    // inside limit
-    const k = ksm[i];
-    if (k > 1e-4) T.wallL[i] = Math.min(T.wallL[i], 0.8 / k);
-    if (k < -1e-4) T.wallR[i] = Math.min(T.wallR[i], 0.8 / -k);
+    for (let i = 0; i < N; i++) {
+      const k = ksm[i];
+      if (k > 1e-4) T.wallL[i] = Math.min(T.wallL[i], 0.8 / k);
+      if (k < -1e-4) T.wallR[i] = Math.min(T.wallR[i], 0.8 / -k);
+    }
+  } else {
+    const before = Math.round(30 / ds), after = Math.round(120 / ds);
+    for (let i = 0; i < N; i++) {
+      let kmax = 0, kmin = 0;
+      for (let q = -before; q <= after; q++) {
+        const k = ksm[(i + q + N) % N];
+        if (k > kmax) kmax = k;
+        if (k < kmin) kmin = k;
+      }
+      // outside of a left turn (k>0) is the right side
+      T.runoffR[i] = kmax > 1 / 320 ? 1 : 0;
+      T.runoffL[i] = kmin < -1 / 320 ? 1 : 0;
+      T.wallR[i] = T.runoffR[i] ? runoff : base;
+      T.wallL[i] = T.runoffL[i] ? runoff : base;
+      // inside limit
+      const k = ksm[i];
+      if (k > 1e-4) T.wallL[i] = Math.min(T.wallL[i], 0.8 / k);
+      if (k < -1e-4) T.wallR[i] = Math.min(T.wallR[i], 0.8 / -k);
+    }
   }
   T.wallL = smoothClosed(T.wallL, 40);
   T.wallR = smoothClosed(T.wallR, 40);
@@ -300,19 +326,42 @@ export function buildTrack(def) {
       for (let i = 0; i < N; i++) arr[i] = Math.min(arr[i], sm[i]);
     }
   }
+  if (def.wallCurvCap) {
+    // prevent inside walls from folding through the centre of curvature on tight hairpins/chicanes
+    for (let i = 0; i < N; i++) {
+      const k = T.kappa[i];
+      if (k > 1 / 40) T.wallL[i] = Math.min(T.wallL[i], Math.max(w2 + 2.5, 0.78 / k));
+      if (k < -1 / 40) T.wallR[i] = Math.min(T.wallR[i], Math.max(w2 + 2.5, 0.78 / -k));
+    }
+    for (const arr of [T.wallL, T.wallR]) {
+      const sm = smoothClosed(arr, 12);
+      for (let i = 0; i < N; i++) arr[i] = Math.min(arr[i], sm[i]);
+    }
+  }
   for (let i = 0; i < N; i++) {
     if (T.wallL[i] < w2 + 12) T.runoffL[i] = 0;
     if (T.wallR[i] < w2 + 12) T.runoffR[i] = 0;
   }
 
-  // kerbs: around corners, both sides
-  const ext = Math.round(14 / ds);
-  for (let i = 0; i < N; i++) {
-    if (Math.abs(ksm[i]) > 1 / 300) {
-      for (let q = -ext; q <= ext * 2; q++) {
-        const j = (i + q + N) % N;
-        T.kerbL[j] = 1; T.kerbR[j] = 1;
+  // kerbs: hand-authored multi-type zones or default symmetric corner kerbs
+  if (def.kerbZones) {
+    for (const [side, s0, s1, type] of def.kerbZones) {
+      paintSpan(side === 1 ? T.kerbL : T.kerbR, s0, s1, type);
+    }
+  } else {
+    const ext = Math.round(14 / ds);
+    for (let i = 0; i < N; i++) {
+      if (Math.abs(ksm[i]) > 1 / 300) {
+        for (let q = -ext; q <= ext * 2; q++) {
+          const j = (i + q + N) % N;
+          T.kerbL[j] = 1; T.kerbR[j] = 1;
+        }
       }
+    }
+  }
+  if (def.armcoZones) {
+    for (const [side, s0, s1] of def.armcoZones) {
+      paintSpan(side === 1 ? T.armcoL : T.armcoR, s0, s1, 1);
     }
   }
 
@@ -389,8 +438,12 @@ export function buildTrack(def) {
   });
   if (def.sectorMetres) T.sectors = [0, ...def.sectorMetres.map(m => Math.round(m / ds))];
   if (def.drsMetres) {
-    const { detect, start, end } = def.drsMetres;
-    T.drs = [{ detect: Math.round(detect / ds), start: Math.round(start / ds), end: Math.round(end / ds) }];
+    const list = Array.isArray(def.drsMetres) ? def.drsMetres : [def.drsMetres];
+    T.drs = list.map(({ detect, start, end }) => ({
+      detect: Math.round(detect / ds) % N,
+      start: Math.round(start / ds) % N,
+      end: Math.round(end / ds) % N,
+    }));
   }
   T.distBoards = [];
 
@@ -496,7 +549,7 @@ export function project(T, px, py, hint) {
   const cxp = lerp(x), cyp = lerp(y);
   const nx = lerp(T.nx), ny = lerp(T.ny);
   const d = (px - cxp) * nx + (py - cyp) * ny;
-  return { i: i0, f, s: (i0 + f) * T.ds, d, h: lerp(T.h), grade: lerp(T.grade), wallL: lerp(T.wallL), wallR: lerp(T.wallR), nx, ny, tx: lerp(T.tx), ty: lerp(T.ty) };
+  return { i: i0, f, s: (i0 + f) * T.ds, d, h: lerp(T.h), grade: lerp(T.grade), camber: lerp(T.camber), wallL: lerp(T.wallL), wallR: lerp(T.wallR), nx, ny, tx: lerp(T.tx), ty: lerp(T.ty) };
 }
 
 // Global search for nearest centreline index (used for resets / init)
