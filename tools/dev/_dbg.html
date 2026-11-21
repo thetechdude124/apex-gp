@@ -1,0 +1,21 @@
+<!doctype html><script type="importmap">{ "imports": { "three": "../../vendor/three/build/three.module.js", "three/addons/": "../../vendor/three/examples/jsm/" } }</script>
+<script type="module">
+// Builds every car at each detail level and logs triangle counts per batch, or the error.
+import { SHELLS } from '../../src/render/cars/index.js';
+import { f1 } from '../../src/render/cars/f1.js';
+import { f2 } from '../../src/render/cars/f2.js';
+const only = new URLSearchParams(location.search).get('car');
+for (const q of [1, 0.6, 0.55, 0.35, 0.3]) {
+  for (const [car, build] of Object.entries({ ...SHELLS, f1: (v, k) => ({ geometry: f1(k) }), f2: (v, k) => ({ geometry: f2(k) }) })) {
+    if (only && car !== only) continue;
+    try {
+      const g = build(car, q).geometry; let total = 0; const parts = [];
+      for (const [n, v] of Object.entries(g)) {
+        const list = Array.isArray(v) ? v : [v];
+        for (const x of list) { if (!x || !x.attributes) { if (x === undefined || x === null) parts.push(n + ':MISSING'); continue; } total += (x.index ? x.index.count : x.attributes.position.count) / 3; }
+      }
+      console.log(`${car} q${q}: ${Math.round(total)} tris ${parts.join(' ')}`);
+    } catch (e) { console.log(`${car} q${q}: ERROR ${e.message} | ${(e.stack || '').split('\n').slice(1, 4).join(' | ').slice(0, 300)}`); }
+  }
+}
+</script>

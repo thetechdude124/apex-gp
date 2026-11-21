@@ -60,7 +60,12 @@ renderer.setScissorTest(true);
 function draw() {
   const W = canvas.width, H = canvas.height, w = W / cols, h = H / rows;
   names.forEach((name, i) => {
-    const [pos, at, fov] = VIEWS[name];
+    // the game's two on-board cameras, placed exactly as src/main.js places them
+    const ud = mesh.userData, onboard = name === 'cockpit' || name === 'pod';
+    const [pos, at, fov] = name === 'cockpit' ? [ud.eye, [20, 0.32, ud.eye[2]], 62]
+      : name === 'pod' ? [ud.pod || [-0.38, ud.roofHeight + 0.23, 0], [20, -0.75, 0], 62] : VIEWS[name];
+    cam.near = onboard ? 0.12 : 0.1;
+    if (ud.driver) ud.driver.visible = name !== 'cockpit';
     cam.fov = fov; cam.aspect = w / h; cam.position.set(...pos); cam.up.set(0, 1, 0); if (name === 'top') cam.up.set(1, 0, 0);
     cam.lookAt(...at); cam.updateProjectionMatrix();
     const x = (i % cols) * w, y = H - (Math.floor(i / cols) + 1) * h;

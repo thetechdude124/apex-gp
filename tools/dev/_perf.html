@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>perf</title>
+<body style="margin:0"><iframe id="f" style="width:1600px;height:900px;border:0"></iframe>
+<script>
+// Loads the game in a frame and logs draw calls, triangles and frame time once it is on the grid.
+const q = location.search.slice(1) || 'auto=hallberg&vehicle=porsche&field=mixed&autopilot=1&laps=3&cam=2';
+const f = document.getElementById('f'); f.src = '/?' + q;
+let n = 0;
+const t = setInterval(() => {
+  const w = f.contentWindow, a = w && w.__apex;
+  if (!a || !a.race || !a.cars.length) return;
+  if (++n < 6) return;
+  clearInterval(t);
+  const info = a.renderer.info; info.autoReset = false; info.reset();
+  w.requestAnimationFrame(() => w.requestAnimationFrame(() => {
+    console.log(`PERF ${q}: calls ${info.render.calls} tris ${info.render.triangles} (one frame, all passes) cars ${a.cars.length} geometries ${info.memory.geometries} textures ${info.memory.textures}`);
+    info.autoReset = true; document.title = 'done';
+  }));
+}, 500);
+</script>

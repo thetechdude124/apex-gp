@@ -9,6 +9,7 @@ import { sportsShell } from './sportscar.js';
 import { VEHICLES } from '../sim/vehicles.js';
 import { f1 } from './cars/f1.js';
 import { f2 } from './cars/f2.js';
+import { closedLivery } from './cars/livery.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // fictional technical partners for the small decals (never another team's name)
@@ -78,9 +79,11 @@ function mirrored(g, shiftUV) {
 // into the merged, livery-mapped geometry the car needs.
 const formulaGeometry = new Map();
 const FORMULA = { f1, f2 };
-function buildGeometry(vehicle) {
-  if (formulaGeometry.has(vehicle)) return formulaGeometry.get(vehicle);
-  const { paintR, carbonR, carbonC, blackR, blackC, chromeR, haloR, haloC, flap } = FORMULA[vehicle]();
+// `rival` cars (everyone but the player) are built at reduced detail.
+function buildGeometry(vehicle, rival = false) {
+  const key = vehicle + (rival ? '/rival' : '');
+  if (formulaGeometry.has(key)) return formulaGeometry.get(key);
+  const { paintR, carbonR, carbonC, blackR, blackC, chromeR, suitR, suitC, haloR, haloC, flap, tubTop } = FORMULA[vehicle](rival ? 0.6 : 1);
   for (const g of paintR) if (g.userData.slot) slot(g, g.userData.slot);
   const hR = haloR.map(finalize);
   const halo = mergeGeometries([...hR, ...hR.map((g) => mirrored(g, false)), ...haloC.map(finalize)]);
@@ -93,6 +96,10 @@ function buildGeometry(vehicle) {
   const black = mergeGeometries([...bR, ...bR.map((g) => mirrored(g, false)), ...blackC.map(finalize)]);
   const chR = chromeR.map(finalize);
   const chrome = mergeGeometries([...chR, ...chR.map((g) => mirrored(g, false))]);
+  const sR = suitR.map(finalize);
+  const suit = mergeGeometries([...sR, ...sR.map((g) => mirrored(g, false)), ...suitC.map(finalize)]);
+  // where the race number lies on the nose: on the tub's own top line
+  const nose = { x: 2.32, y: tubTop(2.32, 0) + 0.004, slope: (tubTop(2.22, 0) - tubTop(2.42, 0)) / 0.2 };
 
   // DRS flap, pivoting about its trailing edge at (-2.585, 1.005)
   const flapG = finalize(flap);
@@ -101,8 +108,14 @@ function buildGeometry(vehicle) {
     const b = flapG.boundingBox, fp = flapG.attributes.position, fuv = flapG.attributes.uv;
     for (let i = 0; i < fp.count; i++) fuv.setXY(i, (fp.getZ(i) - b.min.z) / (b.max.z - b.min.z), (fp.getY(i) - b.min.y) / (b.max.y - b.min.y));
   }
-  const geometry = { paint: paintAll, carbon, black, chrome, flap: flapG, halo };
-  formulaGeometry.set(vehicle, geometry);
+  // distant cars: the same car built coarsely, with the small parts left out
+  const far = FORMULA[vehicle](0.35);
+  for (const g of far.paintR) if (g.userData.slot) g.userData.uvShift = [ATLAS[g.userData.slot].dx, ATLAS[g.userData.slot].dy];
+  const fp = far.paintR.map((g) => projectUV(finalize(g), 1)), fc = far.carbonR.map(finalize);
+  const farPaint = mergeGeometries([...fp, ...fp.map((g) => mirrored(g, true))]);
+  const farCarbon = mergeGeometries([...fc, ...fc.map((g) => mirrored(g, false)), ...far.carbonC.map(finalize)]);
+  const geometry = { paint: paintAll, carbon, black, chrome, suit, nose, flap: flapG, halo, farPaint, farCarbon };
+  formulaGeometry.set(key, geometry);
   return geometry;
 }
 
@@ -310,12 +323,11 @@ function seamsAndFilm(d) {
   };
   seam([[2.36, 0.17], [2.34, 0.56]], 3);                                       // nose cone joint
   seam([[1.22, 0.17], [1.2, 0.72]], 3);                                        // chassis / nose box
-  seam([[0.48, 0.17], [0.46, 0.66]], 3);                                       // sidepod inlet panel
-  seam([[-0.55, 0.14], [-0.6, 0.6], [-0.66, 1.0]], 5);                         // engine cover front edge
-  seam([[0.46, 0.6], [-0.6, 0.6], [-1.6, 0.52], [-2.25, 0.44]], 9);            // cover / sidepod split
-  seam([[-1.55, 0.13], [-1.6, 0.52]], 2);                                      // rear bodywork
-  // cooling louvres on the engine cover shoulder
-  for (let k = 0; k < 7; k++) d.fill([[-0.86 - k * 0.075, 0.585], [-0.905 - k * 0.075, 0.585], [-0.935 - k * 0.075, 0.545], [-0.89 - k * 0.075, 0.545]], 'rgba(0,0,0,0.5)');
+  seam([[0.5, 0.2], [0.47, 0.62]], 3);                                         // sidepod inlet panel
+  seam([[-0.5, 0.12], [-0.55, 0.52]], 2);                                      // sidepod service panel
+  seam([[-0.62, 0.6], [-0.68, 1.0]], 3);                                       // engine cover front edge
+  // (the cover / sidepod split and the cooling gills are modelled now, so they are not painted on)
+  seam([[-1.42, 0.5], [-1.5, 0.84]], 2);                                       // rear bodywork
   // gentle top-light in the paint itself, and road film low on the flanks
   d.rect(PX0, 0, PX1, PYMAX, d.grad(0, 1.0, 0, 0.0, [[0, 'rgba(255,255,255,0.05)'], [0.45, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.2)']]));
   d.rect(-2.6, 0.1, 1.9, 0.42, d.grad(0, 0.42, 0, 0.1, [[0, 'rgba(30,26,22,0)'], [1, 'rgba(30,26,22,0.2)']]));
@@ -707,10 +719,14 @@ function shared() {
     // constant depth bias only: a slope-scaled offset pulls the shadow up over the bottom of the tyres at low camera angles
     blob: new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, color: 0x000000, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -3 }),
     sidewall: {},
+    liner: new THREE.MeshStandardMaterial({ color: 0x08080a, roughness: 0.95, side: THREE.BackSide }),
+    cage: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.42, metalness: 0.65 }),
+    caliper: new THREE.MeshStandardMaterial({ color: 0xc8261c, roughness: 0.4, metalness: 0.3 }),
     weave,
   };
   return SHARED;
 }
+const CALIPER = new THREE.BoxGeometry(0.12, 0.07, 0.06);
 function sidewallMat(color) {
   const S = shared();
   if (!S.sidewall[color]) S.sidewall[color] = new THREE.MeshStandardMaterial({ map: sidewallTexture(color), transparent: true, depthWrite: false, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2 });
@@ -732,9 +748,10 @@ function makeFarCar(vehicle, bodyGeo, paint, axles, own) {
       part.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
       parts.push(part);
     };
-    add(bodyGeo.carbon, 0x222428);
-    if (bodyGeo.glass) {
-      add(bodyGeo.glass, 0x304454); add(bodyGeo.lamps, 0xf3f8ff); add(bodyGeo.rear, 0xb81a20);
+    add(bodyGeo.farCarbon || bodyGeo.carbon, 0x222428);
+    if (bodyGeo.lamps) {
+      if (bodyGeo.glass) add(bodyGeo.glass, 0x304454); add(bodyGeo.lamps, 0xf3f8ff); add(bodyGeo.rear, 0xb81a20);
+      if (bodyGeo.window) add(bodyGeo.window, 0x10161c);
     } else {
       add(bodyGeo.halo, 0x222428);
       add(bodyGeo.flap.clone().translate(-2.585, 1.005, 0), 0x303239);
@@ -760,25 +777,49 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
   const G = wheelGeometry(), S = shared(), L = liveryOf(team);
   const group = new THREE.Group(), own = [];
   const add = (geo, mat, cast = true) => { const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; group.add(m); return m; };
-  const sport = closed ? sportsShell(vehicle) : null;
-  const bodyGeo = closed ? sport.geometry : buildGeometry(vehicle);
+  const rival = lodDistance > 0;
+  const sport = closed ? sportsShell(vehicle, rival) : null;
+  const bodyGeo = closed ? sport.geometry : buildGeometry(vehicle, rival);
   const paint = new THREE.MeshPhysicalMaterial(FINISH[L.finish] || FINISH.gloss);
   own.push(paint);
   let halo = null;
   if (closed) {
-    paint.color.set(team.color);
+    if (bodyGeo.paint.attributes.uv) { // bodies built with the kit carry livery UVs: stripes, numbers and partner names come from one texture
+      const p = VEHICLES[vehicle].params;
+      const livery = closedLivery(team, number, vehicle, { a: p.a, b: p.b, door: sport.door, eye: sport.eye, mirror: [sport.mirrorX, sport.mirrorY] }, lodDistance ? 1024 : 2048);
+      paint.map = livery.tex; own.push({ dispose: livery.release });
+    } else paint.color.set(team.color);
     const accent = new THREE.MeshStandardMaterial({ color: team.color2, roughness: 0.34, metalness: 0.24 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x253342, metalness: 0.42, roughness: 0.14, clearcoat: 1 });
     const lamp = new THREE.MeshStandardMaterial({ color: 0xf0f5ff, emissive: 0xcce4ff, emissiveIntensity: 2.2, roughness: 0.2 });
     own.push(accent, glass, lamp);
-    add(bodyGeo.trim, accent); add(bodyGeo.glass, glass); add(bodyGeo.lamps, lamp, false);
+    add(bodyGeo.trim, accent); if (bodyGeo.glass) add(bodyGeo.glass, glass); add(bodyGeo.lamps, lamp, false);
     if (bodyGeo.black) add(bodyGeo.black, S.black);
     if (bodyGeo.chrome) add(bodyGeo.chrome, S.chrome, false);
+    // see-through glazing over real window openings, clear lamp lenses, and what shows behind them
+    if (bodyGeo.window) {
+      const m = new THREE.MeshPhysicalMaterial({ color: 0x0a0f14, roughness: 0.03, metalness: 0, transparent: true, opacity: 0.66, depthWrite: false, envMapIntensity: 1.7 });
+      own.push(m); add(bodyGeo.window, m, false).renderOrder = 2;
+    }
+    if (bodyGeo.lens) {
+      const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.02, metalness: 0, transparent: true, opacity: 0.2, depthWrite: false, envMapIntensity: 2 });
+      own.push(m); add(bodyGeo.lens, m, false).renderOrder = 2;
+    }
+    if (bodyGeo.liner) add(bodyGeo.liner, S.liner, false);
+    if (bodyGeo.metal) add(bodyGeo.metal, S.cage);
+    if (bodyGeo.suit) {
+      const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(team.color).multiplyScalar(0.55), roughness: 0.92 });
+      own.push(m); add(bodyGeo.suit, m, false);
+    }
   } else {
     const livery = liveryTexture(team);
     paint.map = livery.tex; own.push({ dispose: livery.release });
     add(bodyGeo.black, S.black, false); add(bodyGeo.chrome, S.chrome, false);
     halo = add(bodyGeo.halo, S.carbon);
+    if (bodyGeo.suit) { // the driver's overalls
+      const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(team.color).multiplyScalar(0.55), roughness: 0.92 });
+      own.push(m); add(bodyGeo.suit, m, false);
+    }
     if (vehicle === 'f2') group.scale.set(0.87, 1.02, 0.96);
   }
   add(bodyGeo.paint, paint);
@@ -786,7 +827,7 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
   const mirrors = [1, -1].map((side) => {
     const m = new THREE.Mesh(G.mirrorGlass, S.chrome);
     m.rotation.y = -Math.PI / 2;
-    if (closed) m.position.set(sport.mirrorX, sport.mirrorY, side * 0.95);
+    if (closed) m.position.set(sport.mirrorX, sport.mirrorY, side * (sport.mirrorZ ?? 0.95));
     else m.position.set(0.9885, 0.735, side * 0.63);
     group.add(m);
     return { mesh: m, side };
@@ -820,6 +861,7 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
     const pg = new THREE.PlaneGeometry(0.2, 0.2);
     own.push(pg);
     for (const s of [1, -1]) {
+      if (closed && paint.map) continue; // the door number is part of the livery texture
       const n = new THREE.Mesh(pg, finMat);
       if (closed) {
         const [x, y, z] = sport.door;
@@ -831,9 +873,10 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
     }
     const nn = new THREE.Mesh(pg, noseMat);
     // lying on the nose, digits upright for someone looking at the car from the front
-    const up = new THREE.Vector3(-1, 0.177, 0).normalize(), right = new THREE.Vector3(0, 0, -1);
+    const nose = bodyGeo.nose || { x: 2.32, y: 0.4065, slope: 0.177 };
+    const up = new THREE.Vector3(-1, nose.slope, 0).normalize(), right = new THREE.Vector3(0, 0, -1);
     nn.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, new THREE.Vector3().crossVectors(right, up)));
-    nn.position.set(2.32, 0.4065, 0);
+    nn.position.set(nose.x, nose.y, 0);
     nn.scale.set(0.8, 0.8, 1);
     if (!closed) group.add(nn);
     // on-board camera pod: the team's second car carries a yellow one so the two can be told apart
@@ -918,8 +961,15 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
       const discMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, emissive: 0xff5a10, emissiveIntensity: 0, roughness: 0.6, side: THREE.DoubleSide });
       own.push(discMat);
       const disc = new THREE.Mesh(G.disc, discMat);
-      disc.position.z = (closed ? side : -side) * (width / 2 - 0.028);
+      // behind the spokes of a dished rim, or just inside the wheel cover of an open-wheel car
+      disc.position.z = closed ? side * (width / 2 - (sport.rim ? 0.125 : 0.028)) : -side * (width / 2 - 0.028);
       spin.add(disc);
+      if (closed) { // brake caliper: fixed to the upright, so it does not turn with the wheel
+        const caliper = new THREE.Mesh(CALIPER, S.caliper);
+        caliper.position.set(-0.135, 0.075, side * (width / 2 - 0.135));
+        caliper.rotation.z = 0.5;
+        steer.add(caliper);
+      }
       group.add(steer);
       wheels.push({ steer, spin, front, disc, walls });
     }
@@ -933,7 +983,7 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
     group.add(lod);
   }
   group.userData = {
-    eye: sport?.eye, roofHeight: sport?.roofHeight, vehicle,
+    eye: sport?.eye, roofHeight: sport?.roofHeight, pod: sport?.pod, vehicle,
     wheels, flapPivot, rearLight: rl, driver, helmet, steeringWheel: swSpin, blob, paint, halo, mirrors, screen: scr,
     dispose() { for (const o of own) o.dispose(); },
   };

@@ -206,12 +206,20 @@ export function sportsGeometry(vehicle, design = {}) {
 }
 
 const cache = new Map();
-export function sportsShell(vehicle) {
-  if (!cache.has(vehicle)) {
-    const shell = SHELLS[vehicle] ? SHELLS[vehicle](vehicle) : sportsGeometry(vehicle);
-    // distant cars reuse the painted body at a fraction of the detail
-    if (SHELLS[vehicle]) shell.geometry.farPaint = SHELLS[vehicle](vehicle, 0.3).geometry.paint;
-    cache.set(vehicle, shell);
+// `rival` cars (everyone but the player) get a lighter build: a coarser skin and the cheapest
+// possible inner shell, since they are never seen from inside.
+export function sportsShell(vehicle, rival = false) {
+  const key = vehicle + (rival ? '/rival' : '');
+  if (!cache.has(key)) {
+    const build = SHELLS[vehicle];
+    const shell = build ? build(vehicle, rival ? 0.55 : 1) : sportsGeometry(vehicle);
+    if (build) {
+      if (!cache.has(vehicle + '/far')) cache.set(vehicle + '/far', build(vehicle, 0.3).geometry);
+      const far = cache.get(vehicle + '/far');
+      shell.geometry.farPaint = far.paint; // distant cars reuse the painted body at a fraction of the detail
+      if (rival && far.liner) shell.geometry.liner = far.liner;
+    }
+    cache.set(key, shell);
   }
-  return cache.get(vehicle);
+  return cache.get(key);
 }

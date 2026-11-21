@@ -8,8 +8,15 @@
 //
 // Every control point is a function of x, so a car is described by a handful of curves
 // (plan outline, side silhouette, fender line, cabin lines). Corners are filleted per point.
-// Details that follow the skin (glass, lamps, vents, stripes, shut lines) are "patches":
-// regions of the same surface lifted a few millimetres and given another material.
+//
+// The skin is addressed by (x, v): x along the car, v along the half section in sample units
+// (body.v('sh', 'in', 0.5) is halfway from the shoulder point to the next one). Three things
+// are built on that address:
+//   holes    real openings cut out of the skin (windows, intakes, lamp apertures)
+//   patches  pieces of the same surface lifted off it, or sunk into it, in another material
+//   regions  patches trimmed to a shape, e.g. the glass that fills a window hole and its frame
+// The inside of the skin is drawn too (the `liner` batch), so openings show a dark cavity and
+// cameras inside the car see a cabin instead of the road.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -69,9 +76,12 @@ export function mirrorZ(g) {
 }
 export const both = (g) => [g, mirrorZ(g)];
 
-// Smooth-shaded grid from rows of points; `out` is a function giving a rough outward direction
-// for a point so the winding can be set without caring how the rows were ordered.
-function gridGeometry(rows, out, fixCentre = false) {
+// ---------------------------------------------------------------- grids and trimming
+// Smooth-shaded grid from rows of points. `out` gives a rough outward direction for a point so
+// the winding can be set without caring how the rows were ordered. `fields` are per-vertex
+// scalars (same shape as rows): only the part of the grid where every field is positive is
+// kept, with cells cut along the zero line.
+function gridGeometry(rows, out, { fixCentre = false, fields = [] } = {}) {
   const nr = rows.length, nc = rows[0].length, pos = new Float32Array(nr * nc * 3), idx = [];
   for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) pos.set(rows[i][j], (i * nc + j) * 3);
   for (let i = 0; i < nr - 1; i++) for (let j = 0; j < nc - 1; j++) {
@@ -82,27 +92,69 @@ function gridGeometry(rows, out, fixCentre = false) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
-  // vote on the winding with every vertex that has a clear outward direction
   const nm = g.attributes.normal;
   let vote = 0;
   for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) {
     const k = i * nc + j, o = out(rows[i][j]);
     vote += nm.getX(k) * o[0] + nm.getY(k) * o[1] + nm.getZ(k) * o[2];
   }
-  if (vote < 0) {
-    const ix = g.index.array;
-    for (let q = 0; q < ix.length; q += 3) { const t = ix[q + 1]; ix[q + 1] = ix[q + 2]; ix[q + 2] = t; }
-    g.computeVertexNormals();
-  }
+  const flipped = vote < 0;
+  if (flipped) for (let k = 0; k < nm.count; k++) nm.setXYZ(k, -nm.getX(k), -nm.getY(k), -nm.getZ(k));
   if (fixCentre) { // vertices on the centreline: no sideways lean, so the two halves meet smoothly
-    const p = g.attributes.position;
-    for (let k = 0; k < p.count; k++) if (Math.abs(p.getZ(k)) < 1e-6) {
+    for (let k = 0; k < nm.count; k++) if (Math.abs(pos[k * 3 + 2]) < 1e-6) {
       const x = nm.getX(k), y = nm.getY(k), l = Math.hypot(x, y) || 1;
       nm.setXYZ(k, x / l, y / l, 0);
     }
   }
-  return g.toNonIndexed();
+  const N = nm.array, P = [], Q = [];
+  const emit = (poly) => { // fan-triangulate a convex polygon of [px,py,pz,nx,ny,nz]
+    for (let k = 1; k < poly.length - 1; k++) for (const v of flipped ? [poly[0], poly[k + 1], poly[k]] : [poly[0], poly[k], poly[k + 1]]) {
+      P.push(v[0], v[1], v[2]); Q.push(v[3], v[4], v[5]);
+    }
+  };
+  const vert = (i, j) => { const k = (i * nc + j) * 3; return [pos[k], pos[k + 1], pos[k + 2], N[k], N[k + 1], N[k + 2], ...fields.map((f) => f[i][j])]; };
+  for (let i = 0; i < nr - 1; i++) for (let j = 0; j < nc - 1; j++) {
+    let poly = [vert(i, j), vert(i + 1, j), vert(i + 1, j + 1), vert(i, j + 1)];
+    for (let f = 0; f < fields.length && poly.length; f++) {
+      const s = 6 + f;
+      if (poly.every((v) => v[s] > 0)) continue;
+      if (poly.every((v) => v[s] <= 0)) { poly = []; break; }
+      const next = [];
+      for (let k = 0; k < poly.length; k++) {
+        const a = poly[k], b = poly[(k + 1) % poly.length];
+        if (a[s] > 0) next.push(a);
+        if ((a[s] > 0) !== (b[s] > 0)) { const t = a[s] / (a[s] - b[s]); next.push(a.map((av, q) => av + (b[q] - av) * t)); }
+      }
+      poly = next;
+    }
+    if (poly.length >= 3) emit(poly);
+  }
+  const soup = new THREE.BufferGeometry();
+  soup.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  soup.setAttribute('normal', new THREE.Float32BufferAttribute(Q, 3));
+  return soup;
 }
+
+// Shapes in (x, v), positive inside, roughly in metres so cuts land where the numbers say.
+// `sv` is the length of one v unit on the surface (about 4 to 5 cm on a typical flank).
+const fn = (k) => (typeof k === 'function' ? k : () => k);
+// Four-sided region: x limits may be functions of t (0 at v[0], 1 at v[1]) for raked edges.
+export function quadRegion({ x, v, r = 0.03, sv = 0.045 }) {
+  const xa = fn(x[0]), xb = fn(x[1]);
+  return (X, V) => {
+    const t = clamp((V - v[0]) / (v[1] - v[0]), 0, 1), a = xa(t), b = xb(t);
+    const cx = (a + b) / 2, hx = Math.abs(b - a) / 2, hv = (Math.abs(v[1] - v[0]) / 2) * sv, rr = Math.min(r, hx, hv);
+    const qx = Math.abs(X - cx) - hx + rr, qv = Math.abs(V - (v[0] + v[1]) / 2) * sv - hv + rr;
+    return rr - (Math.hypot(Math.max(qx, 0), Math.max(qv, 0)) + Math.min(Math.max(qx, qv), 0));
+  };
+}
+export function ellipseRegion({ x, v, rx, rv, sv = 0.045 }) {
+  return (X, V) => (1 - Math.hypot((X - x) / rx, (V - v) / rv)) * Math.min(rx, rv * sv);
+}
+// Combine shapes: inside any / inside all / inside the first but not the rest.
+export const anyOf = (...ds) => (X, V) => Math.max(...ds.map((d) => d(X, V)));
+export const allOf = (...ds) => (X, V) => Math.min(...ds.map((d) => d(X, V)));
+export const minus = (d, ...cut) => (X, V) => Math.min(d(X, V), ...cut.map((c) => -c(X, V)));
 
 const ORDER = ['floor', 'wellIn', 'wellTop', 'lip', 'side', 'sh', 'in', 'rail', 'top'];
 // samples laid on each corner's fillet. Two samples with no radius make a hard crease.
@@ -145,7 +197,7 @@ export function makeBody(spec, quality = 1) {
     const e = blunt(x), up = (y) => lip + (Math.max(y, lip + 0.004) - lip) * e;
     const sideY = Math.max(f.sideY(x), lip + 0.03), shY = Math.max(f.shY(x), sideY + 0.02);
     return {
-      floor: [0, floor], wellIn: [zIn, floor], wellTop: [zIn, lip], lip: [f.wLip(x) * (inArch ? 1 : 1), lip],
+      floor: [0, floor], wellIn: [zIn, floor], wellTop: [zIn, lip], lip: [f.wLip(x), lip],
       side: [w, up(sideY)], sh: [f.shZ(x), up(shY)], in: [f.inZ(x), up(f.inY(x))], rail: [f.railZ(x), up(f.railY(x))], top: [0, up(f.top(x))],
     };
   }
@@ -176,21 +228,21 @@ export function makeBody(spec, quality = 1) {
   }
 
   // v runs along the half section in sample units; past the roof centreline it continues down the other side
+  const top = count - 1, fold = (v) => (v > top ? 2 * top - v : v);
   function point(x, v, target = new THREE.Vector3()) {
-    const s = section(clamp(x, x0, x1)), top = count - 1;
+    const s = section(clamp(x, x0, x1));
     let vv = clamp(v, 0, 2 * top), sign = 1;
     if (vv > top) { vv = 2 * top - vv; sign = -1; }
     const i = Math.min(top - 1, Math.floor(vv)), t = vv - i, a = s[i], b = s[i + 1];
     return target.set(lerp(a[0], b[0], t), lerp(a[1], b[1], t), sign * lerp(a[2], b[2], t));
   }
   const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
+  let flip = 1;
   function normal(x, v, target = new THREE.Vector3()) {
     const hx = 0.006, hv = 0.25;
     point(x + hx, v, _a); point(x - hx, v, _b); point(x, v + hv, _c); point(x, v - hv, _d);
-    target.crossVectors(_c.sub(_d), _a.sub(_b)).normalize().multiplyScalar(flip);
-    return target;
+    return target.crossVectors(_c.sub(_d), _a.sub(_b)).normalize().multiplyScalar(flip);
   }
-  let flip = 1;
 
   // station list: even spacing, plus fine steps round the arches and the blunt ends
   const step = 0.034 / quality, xs = new Set();
@@ -210,44 +262,63 @@ export function makeBody(spec, quality = 1) {
   const rows = stations.map((x) => section(x));
   const split = Math.ceil(lipSplit);
   const outward = (p) => [0, p[1] > 0.3 ? 0.4 : -0.2, p[2] > 0.02 ? 1 : 0];
-  const skinHalf = gridGeometry(rows.map((r) => r.slice(split)), outward, true);
-  const underHalf = gridGeometry(rows.map((r) => r.slice(0, split)), (p) => [0, -1, 0]);
-
+  // openings: each is a shape in (x, v), positive inside
+  // (given as a function, it receives { v(from, to, t), top } so shapes can use named section points)
+  const vAt = (from, to = from, t = 0) => lerp(anchor[from], anchor[to], t);
+  const holes = (typeof spec.holes === 'function' ? spec.holes({ v: vAt, top }) : spec.holes) || [];
+  const fields = holes.map((d) => stations.map((x) => rows[0].slice(split).map((_, j) => -d(x, split + j))));
+  const skinHalf = gridGeometry(rows.map((r) => r.slice(split)), outward, { fixCentre: true, fields });
+  const underHalf = gridGeometry(rows.map((r) => r.slice(0, split)), () => [0, -1, 0]);
   { const t = normal((x0 + x1) / 2, anchor.side); if (t.z < 0) flip = -1; }
+
+  const skin = mergeGeometries([skinHalf, mirrorZ(skinHalf)]), under = mergeGeometries([underHalf, mirrorZ(underHalf)]);
   const body = {
-    spec, x0, x1, count, anchor, point, normal, section,
+    spec, x0, x1, count, top, anchor, point, normal, section, skin, under, holes,
     width: f.w,
-    skin: mergeGeometries([skinHalf, mirrorZ(skinHalf)]),
-    under: mergeGeometries([underHalf, mirrorZ(underHalf)]),
+    // everything the inside of the car is made of: drawn back-face only, in matt black
+    liner: mergeGeometries([skin, under]),
     // v position a fraction of the way from one named control point to the next
     v(from, to = from, t = 0) { return lerp(anchor[from], anchor[to], t); },
     // v on the far (z < 0) side of the car
-    far(v) { return 2 * (count - 1) - v; },
+    far(v) { return 2 * top - v; },
     // x on the nose face at a height fraction (0 = bottom edge, 1 = where the face meets the bonnet)
     noseX(h) { return x1 - nose.L * (1 - (1 - clamp(h, 0, 1) ** nose.p) ** (1 / nose.p)); },
     tailX(h) { return x0 + tail.L * (1 - (1 - clamp(h, 0, 1) ** tail.p) ** (1 / tail.p)); },
-    // A region of the skin lifted off the surface. `at(s, t)` maps the unit square to [x, v].
-    patch({ at, ns = 10, nt = 10, lift = 0.003, mirror = true }) {
-      const grid = [], n = new THREE.Vector3(), p = new THREE.Vector3();
+    // A piece of the skin lifted off the surface (negative lift sinks it inside).
+    // `at(s, t)` maps the unit square to [x, v]. `keep` trims it: shapes in (x, v), kept where positive.
+    patch({ at, ns = 10, nt = 10, lift = 0.003, mirror = true, keep = [] }) {
+      const grid = [], addr = [], n = new THREE.Vector3(), p = new THREE.Vector3();
       let dir = [0, 1, 0];
       for (let i = 0; i <= ns; i++) {
-        const row = [];
+        const row = [], arow = [];
         for (let j = 0; j <= nt; j++) {
           const [x, v] = at(i / ns, j / nt);
           point(x, v, p); normal(x, v, n);
           if (n.lengthSq() < 0.5) n.set(0, 1, 0);
           if (i === ns >> 1 && j === nt >> 1) dir = [n.x, n.y, n.z];
           row.push([p.x + n.x * lift, p.y + n.y * lift, p.z + n.z * lift]);
+          arow.push([x, fold(v)]);
         }
-        grid.push(row);
+        grid.push(row); addr.push(arow);
       }
-      const g = gridGeometry(grid, () => dir);
+      const fields = keep.map((d) => addr.map((r) => r.map(([x, v]) => d(x, v))));
+      const g = gridGeometry(grid, () => dir, { fields });
+      if (!g.attributes.position.count) return [];
       return mirror ? [g, mirrorZ(g)] : [g];
     },
     // Rectangle in (x, v): x limits may be functions of t (0 at v0, 1 at v1) for raked edges.
     rect({ x, v, ns = 10, nt = 8, ...rest }) {
-      const xa = typeof x[0] === 'function' ? x[0] : () => x[0], xb = typeof x[1] === 'function' ? x[1] : () => x[1];
+      const xa = fn(x[0]), xb = fn(x[1]);
       return body.patch({ at: (s, t) => [lerp(xa(t), xb(t), s), lerp(v[0], v[1], t)], ns, nt, ...rest });
+    },
+    // The part of the skin inside a shape `d` (as given to `holes`), within the box x:[a,b] v:[a,b].
+    // `band: [lo, hi]` keeps lo < d < hi instead: [-0.02, 0.004] is a 2 cm frame round the shape,
+    // [-0.005, Infinity] the shape grown by 5 mm (glass that tucks under its frame).
+    region(d, { x, v, band = [0, Infinity], cell = 0.03, ...rest }) {
+      const ns = Math.max(2, Math.round(Math.abs(x[1] - x[0]) / cell)), nt = Math.max(2, Math.round((Math.abs(v[1] - v[0]) * 0.045) / cell));
+      const keep = [(X, V) => d(X, V) - band[0]];
+      if (band[1] !== Infinity) keep.push((X, V) => band[1] - d(X, V));
+      return body.patch({ at: (s, t) => [lerp(x[0], x[1], s), lerp(v[0], v[1], t)], ns, nt, keep, ...rest });
     },
     // Thin line along the skin through [x, v] points (shut lines, pinstripes).
     line(points, width = 0.006, { lift = 0.002, mirror = true } = {}) {
@@ -284,6 +355,17 @@ export function rod(a, b, radius, seg = 8) {
   const g = new THREE.CylinderGeometry(radius, radius, axis.length(), seg);
   return g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.normalize())).translate(mid.x, mid.y, mid.z);
 }
+// Tube through a list of points (roll-cage bars, hoses, wiper arms).
+export function tube(points, radius, seg = 8) {
+  const out = [];
+  for (let i = 0; i < points.length - 1; i++) out.push(rod(points[i], points[i + 1], radius, seg));
+  for (let i = 1; i < points.length - 1; i++) out.push(new THREE.SphereGeometry(radius, seg, 6).translate(...points[i]));
+  return out;
+}
+// Disc or short cylinder with its axis along x (exhaust tips, lamp projectors, filler caps).
+export function disc(x, y, z, radius, depth = 0.01, seg = 20, open = false) {
+  return new THREE.CylinderGeometry(radius, radius, depth, seg, 1, open).rotateZ(Math.PI / 2).translate(x, y, z);
+}
 // Flat outline in the x-y plane, given thickness across the car and centred on z.
 export function slab(points, thickness, z = 0, bevel = 0) {
   const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
@@ -298,15 +380,56 @@ export function plate(points, thickness, y = 0) {
 // Wing element spanning the car. Trailing edge at x, chord runs forward; positive angle = more wing.
 export function wing(x, y, span, chord, { thick = 0.11, camber = 0.07, angle = 0.14, z = 0 } = {}) {
   const pts = [], n = 14;
-  for (let i = 0; i <= n; i++) { // upper surface, trailing edge to leading edge
-    const c = i / n, t = thick * chord * 2.2 * (Math.sqrt(c) * (1 - c) + 0.02 * (1 - c));
-    pts.push([c * chord, -camber * chord * 4 * c * (1 - c) + t * 0.45]);
+  const half = (c) => thick * chord * 2.2 * (Math.sqrt(c) * (1 - c) + 0.02 * (1 - c));
+  for (let i = 0; i <= n; i++) { const c = i / n; pts.push([c * chord, -camber * chord * 4 * c * (1 - c) + half(c) * 0.45]); }
+  for (let i = n - 1; i >= 1; i--) { const c = i / n; pts.push([c * chord, -camber * chord * 4 * c * (1 - c) - half(c) * 0.55]); }
+  return slab(pts.map(([px, py]) => [-px, py]), span, 0).rotateZ(-angle).translate(x, y, z);
+}
+
+// Door-mirror housing for the game's own mirror glass, which is a 16.5 x 6.2 cm plane facing
+// backwards at (x, y, ±z). Returns { shell, back } for one side (mirror with `both`): the shell
+// is a rounded cap ahead of the glass, the back a dark plate just behind it.
+export function mirrorHousing(x, y, z = 0.95) {
+  const shell = new THREE.SphereGeometry(1, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2).rotateZ(-Math.PI / 2).scale(0.075, 0.046, 0.098).translate(x + 0.006, y, z);
+  const rim = box(x + 0.012, y, z, 0.012, 0.088, 0.192);
+  return { shell: [shell, rim], back: [box(x + 0.004, y, z, 0.004, 0.07, 0.175)] };
+}
+
+// Racing cockpit: floor, bucket seat, belted driver torso and arms, dash, and a roll cage.
+// `seat` is the driver's hip point [x, y, z]; `wheel` the steering wheel centre (the game draws
+// the wheel and the helmet itself); `cabin` the space available: { x0 (rear bulkhead), x1 (dash),
+// w (inside half width), roof (inside roof height), floor, dash (height of the dash top) }.
+export function cockpit({ seat, wheel, cabin }) {
+  const [sx, sy, sz] = seat, { x0, x1, w, roof, floor } = cabin;
+  const black = [], carbon = [], metal = [], suit = [];
+  black.push(box((x0 + x1) / 2, floor - 0.01, 0, x1 - x0, 0.02, w * 2));                       // floor pan
+  black.push(box(x0, (floor + roof * 0.8) / 2, 0, 0.03, roof * 0.8 - floor, w * 2));              // rear bulkhead
+  black.push(box(x1 + 0.12, cabin.dash ?? sy + 0.34, 0, 0.34, 0.06, w * 2, -0.06));                               // dash top
+  carbon.push(box(x1 - 0.03, sy + 0.24, sz, 0.05, 0.16, 0.34), box(x1 - 0.1, sy + 0.05, w * 0.2, 0.5, 0.3, 0.2)); // binnacle, centre console
+  // bucket seat with shoulder and head wings
+  carbon.push(slab([[sx - 0.3, sy - 0.14], [sx + 0.36, sy - 0.16], [sx + 0.38, sy - 0.08], [sx - 0.1, sy - 0.05], [sx - 0.27, sy + 0.55], [sx - 0.2, sy + 0.82], [sx - 0.3, sy + 0.84], [sx - 0.38, sy + 0.5]], 0.44, sz));
+  for (const s of [-1, 1]) {
+    carbon.push(slab([[sx - 0.28, sy - 0.1], [sx + 0.3, sy - 0.1], [sx + 0.3, sy + 0.04], [sx - 0.1, sy + 0.1], [sx - 0.2, sy + 0.5], [sx - 0.3, sy + 0.5]], 0.03, sz + s * 0.235));
+    carbon.push(slab([[sx - 0.3, sy + 0.6], [sx - 0.06, sy + 0.62], [sx - 0.06, sy + 0.8], [sx - 0.28, sy + 0.82]], 0.03, sz + s * 0.19));
   }
-  for (let i = n - 1; i >= 1; i--) { // lower surface back to the trailing edge
-    const c = i / n, t = thick * chord * 2.2 * (Math.sqrt(c) * (1 - c) + 0.02 * (1 - c));
-    pts.push([c * chord, -camber * chord * 4 * c * (1 - c) - t * 0.55]);
+  // driver: torso, shoulders, upper legs, arms to the wheel
+  suit.push(ellipsoid(sx - 0.1, sy + 0.3, sz, 0.13, 0.27, 0.19, 0.22), ellipsoid(sx - 0.14, sy + 0.5, sz, 0.1, 0.09, 0.22));
+  for (const s of [-1, 1]) {
+    suit.push(tube([[sx - 0.02, sy + 0.02, sz + s * 0.1], [sx + 0.36, sy + 0.08, sz + s * 0.11], [x1 + 0.1, sy - 0.02, sz + s * 0.1]], 0.07));
+    suit.push(tube([[sx - 0.13, sy + 0.5, sz + s * 0.2], [sx + 0.1, sy + 0.3, sz + s * 0.25], [wheel[0] - 0.03, wheel[1], wheel[2] + s * 0.14]], 0.045));
+    metal.push(rod([sx - 0.2, sy + 0.56, sz + s * 0.07], [sx + 0.0, sy + 0.1, sz + s * 0.09], 0.012, 5));  // harness
   }
-  return slab(pts.map(([px, py]) => [chord - px, py]).map(([px, py]) => [px - chord, py]), span, 0).rotateZ(-angle).translate(x, y, z);
+  metal.push(rod([wheel[0], wheel[1], wheel[2]], [x1 + 0.12, wheel[1] - 0.06, wheel[2]], 0.02));            // steering column
+  // roll cage: main hoop, front legs, roof and door bars, rear stays
+  const r = 0.021, ht = roof - 0.03, cw = w - 0.035, hx = sx - 0.34, fx = x1 + 0.05;
+  for (const s of [-1, 1]) {
+    metal.push(...tube([[hx, floor, s * cw], [hx, ht - 0.06, s * cw * 0.96], [hx, ht, s * cw * 0.84]], r));
+    metal.push(...tube([[fx, floor, s * cw], [fx - 0.02, sy + 0.42, s * cw], [(hx + fx) / 2 + 0.2, ht - 0.01, s * cw * 0.86], [hx, ht, s * cw * 0.84]], r));
+    metal.push(rod([hx, floor + 0.14, s * cw], [fx, sy + 0.2, s * cw], r), rod([hx, sy + 0.3, s * cw], [fx, floor + 0.12, s * cw], r));
+    metal.push(rod([hx, ht - 0.05, s * cw * 0.9], [x0 + 0.03, floor + 0.3, s * cw * 0.8], r));
+  }
+  metal.push(rod([hx, ht, -cw * 0.84], [hx, ht, cw * 0.84], r), rod([hx, floor + 0.5, -cw], [hx, ht - 0.03, cw * 0.84], r), rod([(hx + fx) / 2 + 0.2, ht - 0.01, -cw * 0.86], [(hx + fx) / 2 + 0.2, ht - 0.01, cw * 0.86], r));
+  return { black, carbon, metal, suit };
 }
 
 // Multi-spoke race rim in the wheel's own frame: axle along z, outer face at z = 0 facing +z.
@@ -342,10 +465,37 @@ export function rimGeometry(radius = 0.236, pairs = 5) {
   return mergeGeometries(parts.map(plain));
 }
 
-// Collects geometry per material and merges once at the end.
+// ---------------------------------------------------------------- livery mapping
+// Painted parts get UVs by projection so one texture per team can carry stripes, numbers and
+// partner names: the car seen from its left, from its right and from above, stacked in one
+// square. Each triangle picks the view it faces, so nothing is smeared across two views.
+export const LIVERY = { x0: -2.75, x1: 2.85, yMax: 1.5, zMax: 1.12, left: [0, 0.3], right: [0.3, 0.6], top: [0.6, 1] };
+export function projectUV(g) {
+  const p = g.attributes.position, n = g.attributes.normal, uv = new Float32Array(p.count * 2), L = LIVERY;
+  for (let i = 0; i < p.count; i += 3) {
+    const ny = (n.getY(i) + n.getY(i + 1) + n.getY(i + 2)) / 3, nz = (n.getZ(i) + n.getZ(i + 1) + n.getZ(i + 2)) / 3;
+    const view = ny > 0.62 ? 'top' : nz >= 0 ? 'left' : 'right';
+    for (let k = i; k < i + 3; k++) {
+      const u = clamp((p.getX(k) - L.x0) / (L.x1 - L.x0), 0, 1);
+      if (view === 'top') { uv[k * 2] = u; uv[k * 2 + 1] = lerp(L.top[0], L.top[1], clamp((p.getZ(k) + L.zMax) / (2 * L.zMax), 0, 1)); }
+      else {
+        const band = L[view];
+        uv[k * 2] = view === 'left' ? u : 1 - u; // each side reads left to right for someone looking at it
+        uv[k * 2 + 1] = lerp(band[0], band[1], clamp(p.getY(k) / L.yMax, 0, 1));
+      }
+    }
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return g;
+}
+
+// Collects geometry per material and merges once at the end. The `paint` batch gets livery UVs.
 export function batches(names) {
   const lists = Object.fromEntries(names.map((n) => [n, []]));
   const add = Object.fromEntries(names.map((n) => [n, (...parts) => { lists[n].push(...parts.flat(Infinity)); }]));
-  add.done = () => Object.fromEntries(names.filter((n) => lists[n].length).map((n) => [n, mergeGeometries(lists[n].map(plain))]));
+  add.done = () => Object.fromEntries(names.filter((n) => lists[n].length).map((n) => {
+    const g = mergeGeometries(lists[n].map(plain));
+    return [n, n === 'paint' ? projectUV(g) : g];
+  }));
   return add;
 }

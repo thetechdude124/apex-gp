@@ -1111,11 +1111,12 @@ function updateCamera(dt) {
     camRig.rotation.order = 'YZX';
     camRig.rotation.set(camCamber, player.rPsi ?? b.psi, Math.atan(camGrade));
     camRig.updateMatrix();
-    const { eye, roofHeight } = m.userData;
-    const local = pod ? new THREE.Vector3(-0.38, roofHeight ? roofHeight + 0.23 : 1.17, 0)
+    const { eye, roofHeight, pod: podAt } = m.userData;
+    // closed cars carry the camera on the front of the roof; open-wheel cars on the airbox
+    const local = pod ? (podAt ? new THREE.Vector3(...podAt) : new THREE.Vector3(-0.38, roofHeight ? roofHeight + 0.23 : 1.17, 0))
       : eye ? new THREE.Vector3(...eye) : new THREE.Vector3(0.34, 0.80, 0);
     const lateral = local.z;
-    wantNear = pod ? 0.5 : 0.12; // the pod's own housing / airbox is clipped out of view
+    wantNear = pod ? (podAt ? 0.12 : 0.5) : 0.12; // the pod's own housing / airbox is clipped out of view
     camera.position.copy(local.applyMatrix4(camRig.matrix));
     camera.up.set(0, Math.cos(camCamber * 0.55), Math.sin(camCamber * 0.55)).applyQuaternion(yawQ);
     camera.lookAt(new THREE.Vector3(20, pod ? -0.75 : 0.32, lateral).applyMatrix4(camRig.matrix));
