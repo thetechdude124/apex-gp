@@ -7,6 +7,8 @@
 import * as THREE from 'three';
 import { sportsShell } from './sportscar.js';
 import { VEHICLES } from '../sim/vehicles.js';
+import { f1 } from './cars/f1.js';
+import { f2 } from './cars/f2.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // fictional technical partners for the small decals (never another team's name)
@@ -17,196 +19,6 @@ const FRONT_Z = 0.83, REAR_Z = 0.79, FRONT_W = 0.305, REAR_W = 0.405;
 const PX0 = -2.9, PX1 = 3.45, PYMAX = 1.08; // livery projection bounds
 
 // ------------------------------------------------------------------ geometry helpers
-function orient(g, testIdx, axis, sign) {
-  g.computeVertexNormals();
-  const n = g.attributes.normal;
-  const v = axis === 'y' ? n.getY(testIdx) : n.getZ(testIdx);
-  if (v * sign < 0) {
-    const ix = g.index.array;
-    for (let q = 0; q < ix.length; q += 3) { const t = ix[q + 1]; ix[q + 1] = ix[q + 2]; ix[q + 2] = t; }
-    g.computeVertexNormals();
-  }
-  return g;
-}
-
-function secPoint(s, th) {
-  const c = Math.cos(th), sn = Math.sin(th);
-  const n = sn >= 0 ? (s.n ?? 2.6) : (s.nb ?? s.n ?? 2.6);
-  const yc = (s.y0 + s.y1) / 2, hh = (s.y1 - s.y0) / 2;
-  let z = s.w * Math.pow(Math.abs(c), 2 / n) * Math.sign(c);
-  const y = yc + hh * Math.sign(sn) * Math.pow(Math.abs(sn), 2 / n);
-  if (sn < 0 && s.bw != null) z *= 1 - (1 - s.bw) * Math.pow(-sn, 1.3);
-  return [y, z];
-}
-
-// Right half (z >= 0) of a body that is symmetric about the centreline.
-function halfLoft(sections, K = 14) {
-  const pos = [], idx = [];
-  const R = K + 1;
-  for (const s of sections) {
-    for (let k = 0; k <= K; k++) {
-      const th = -Math.PI / 2 + (k / K) * Math.PI;
-      const [y, z] = secPoint(s, th);
-      pos.push(s.x, y, Math.max(0, z));
-    }
-  }
-  for (let i = 0; i < sections.length - 1; i++) for (let k = 0; k < K; k++) {
-    const a = i * R + k, b = a + 1, c = a + R, d = c + 1;
-    idx.push(a, c, b, b, c, d);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  orient(g, Math.floor(sections.length / 2) * R + Math.floor(K / 2), 'z', 1);
-  // seam: normals on the centreline must not lean sideways
-  const p = g.attributes.position, n = g.attributes.normal;
-  for (let i = 0; i < p.count; i++) if (Math.abs(p.getZ(i)) < 1e-5) {
-    const nx = n.getX(i), ny = n.getY(i), l = Math.hypot(nx, ny) || 1;
-    n.setXYZ(i, nx / l, ny / l, 0);
-  }
-  return g;
-}
-
-// Closed tube around its own axis (sidepods etc.), centred at z = zc.
-function fullLoft(sections, K = 22, zc = 0, capFront = false) {
-  const pos = [], idx = [];
-  for (const s of sections) for (let k = 0; k < K; k++) {
-    const th = (k / K) * Math.PI * 2;
-    const [y, z] = secPoint(s, th);
-    pos.push(s.x, y, zc + (s.zo ?? 0) + z);
-  }
-  for (let i = 0; i < sections.length - 1; i++) for (let k = 0; k < K; k++) {
-    const a = i * K + k, b = i * K + ((k + 1) % K), c = a + K, d = b + K;
-    idx.push(a, c, b, b, c, d);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  return orient(g, Math.floor(sections.length / 2) * K + Math.round(K / 4), 'y', 1);
-}
-
-// flat cap for one section of a full loft (used for inlets / tail ends)
-function sectionCap(s, K, zc, facing) {
-  const pos = [], idx = [];
-  const yc = (s.y0 + s.y1) / 2;
-  pos.push(s.x, yc, zc + (s.zo ?? 0));
-  for (let k = 0; k < K; k++) {
-    const [y, z] = secPoint(s, (k / K) * Math.PI * 2);
-    pos.push(s.x, yc + (y - yc) * 0.985, zc + (s.zo ?? 0) + z * 0.985);
-  }
-  for (let k = 0; k < K; k++) idx.push(0, 1 + k, 1 + ((k + 1) % K));
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  if (g.attributes.normal.getX(0) * facing < 0) {
-    const ix = g.index.array;
-    for (let q = 0; q < ix.length; q += 3) { const t = ix[q + 1]; ix[q + 1] = ix[q + 2]; ix[q + 2] = t; }
-    g.computeVertexNormals();
-  }
-  return g;
-}
-
-// Wing from span stations {z, x (leading edge), y, c (chord), a (deg, trailing edge up), t}
-function wing(stations, M = 7, camber = 0.07) {
-  const pos = [], idx = [];
-  const R = 2 * M;
-  for (const s of stations) {
-    const phi = (s.a * Math.PI) / 180, cs = Math.cos(phi), sn = Math.sin(phi);
-    const prof = [];
-    for (let i = 0; i <= M; i++) { // upper surface LE -> TE
-      const u = i / M;
-      const th = 5 * (s.t ?? 0.1) * (0.2969 * Math.sqrt(u) - 0.126 * u - 0.3516 * u * u + 0.2843 * u ** 3 - 0.1036 * u ** 4);
-      prof.push([u, -camber * 4 * u * (1 - u) + th]);
-    }
-    for (let i = M - 1; i >= 1; i--) { // lower surface TE -> LE
-      const u = i / M;
-      const th = 5 * (s.t ?? 0.1) * (0.2969 * Math.sqrt(u) - 0.126 * u - 0.3516 * u * u + 0.2843 * u ** 3 - 0.1036 * u ** 4);
-      prof.push([u, -camber * 4 * u * (1 - u) - th]);
-    }
-    for (const [u, yl] of prof) {
-      const bx = -u * s.c, by = yl * s.c; // back along the chord, up through the thickness
-      pos.push(s.x + bx * cs + by * sn, s.y - bx * sn + by * cs, s.z); // +a lifts the trailing edge
-    }
-  }
-  const S = stations.length;
-  for (let i = 0; i < S - 1; i++) for (let k = 0; k < R; k++) {
-    const a = i * R + k, b = i * R + ((k + 1) % R), c = a + R, d = b + R;
-    idx.push(a, c, b, b, c, d);
-  }
-  // end caps
-  for (const [i, flip] of [[0, false], [S - 1, true]]) {
-    for (let k = 1; k < R - 1; k++) {
-      const a = i * R, b = i * R + k, c = i * R + k + 1;
-      if (flip) idx.push(a, c, b); else idx.push(a, b, c);
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setIndex(idx);
-  return orient(g, Math.floor(S / 2) * R + Math.floor(M / 2), 'y', 1);
-}
-
-// thin plate from a 2D outline in the x-y plane, at lateral position z
-function plate(outline, z, thick = 0.014) {
-  const sh = new THREE.Shape();
-  outline.forEach(([x, y], i) => (i ? sh.lineTo(x, y) : sh.moveTo(x, y)));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: thick, bevelEnabled: false });
-  g.translate(0, 0, z - thick / 2);
-  return g;
-}
-
-// flat plate from an outline in the x-z plane at height y
-function floorPlate(outline, y, thick = 0.025) {
-  const sh = new THREE.Shape();
-  outline.forEach(([x, z], i) => (i ? sh.lineTo(x, z) : sh.moveTo(x, z)));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: thick, bevelEnabled: false });
-  g.rotateX(Math.PI / 2);
-  g.translate(0, y, 0);
-  return g;
-}
-
-// one-sided painted skin facing +z (outer face of an endplate)
-function skin(outline, z) {
-  const sh = new THREE.Shape();
-  outline.forEach(([x, y], i) => (i ? sh.lineTo(x, y) : sh.moveTo(x, y)));
-  const g = new THREE.ShapeGeometry(sh);
-  g.translate(0, 0, z);
-  g.computeVertexNormals();
-  if (g.attributes.normal.getZ(0) < 0) {
-    const ix = g.index.array;
-    for (let q = 0; q < ix.length; q += 3) { const t = ix[q + 1]; ix[q + 1] = ix[q + 2]; ix[q + 2] = t; }
-    g.computeVertexNormals();
-  }
-  return g;
-}
-
-function box(lx, ly, lz, x, y, z, rz = 0, ry = 0) {
-  const g = new THREE.BoxGeometry(lx, ly, lz);
-  if (rz) g.rotateZ(rz);
-  if (ry) g.rotateY(ry);
-  g.translate(x, y, z);
-  return g;
-}
-
-// aero-profile suspension arm between two points
-function arm(a, b, chord = 0.07, thick = 0.02) {
-  const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b);
-  const Y = vb.clone().sub(va);
-  const len = Y.length();
-  Y.normalize();
-  const X = new THREE.Vector3(1, 0, 0).addScaledVector(Y, -Y.x).normalize();
-  const Z = new THREE.Vector3().crossVectors(X, Y);
-  const g = new THREE.CylinderGeometry(0.5, 0.5, len, 8);
-  g.scale(chord, 1, thick);
-  g.applyMatrix4(new THREE.Matrix4().makeBasis(X, Y, Z));
-  const mid = va.add(vb).multiplyScalar(0.5);
-  g.translate(mid.x, mid.y, mid.z);
-  return g;
-}
-
-function rod(a, b, r) { return arm(a, b, r * 2, r * 2); }
-
 function finalize(g) {
   let out = g.index ? g.toNonIndexed() : g;
   out.userData = g.userData;
@@ -224,7 +36,9 @@ const ATLAS = {}; // name -> { dx, dy, x0, y0, x1, y1 } (the part's own extents)
 function slot(g, name) {
   g.computeBoundingBox();
   const b = g.boundingBox;
-  ATLAS[name] = { dx: SLOT[name][0] - b.min.x, dy: SLOT[name][1] - b.min.y, x0: b.min.x, y0: b.min.y, x1: b.max.x, y1: b.max.y };
+  // both open-wheel cars share one livery texture per team: keep the larger part's extents
+  const prev = ATLAS[name], w = Math.max(b.max.x - b.min.x, prev ? prev.x1 - prev.x0 : 0), h = Math.max(b.max.y - b.min.y, prev ? prev.y1 - prev.y0 : 0);
+  ATLAS[name] = { dx: SLOT[name][0] - b.min.x, dy: SLOT[name][1] - b.min.y, x0: b.min.x, y0: b.min.y, x1: b.min.x + w, y1: b.min.y + h };
   g.userData.uvShift = [ATLAS[name].dx, ATLAS[name].dy];
   return g;
 }
@@ -260,194 +74,27 @@ function mirrored(g, shiftUV) {
 }
 
 // ------------------------------------------------------------------ shared geometry (built once)
+// The open-wheel bodies are described in cars/f1.js and cars/f2.js; this turns their part lists
+// into the merged, livery-mapped geometry the car needs.
 const formulaGeometry = new Map();
-const FORMULA = {
-  f1: { noseWidth: 1.6, podWidth: 1.07, podHeight: 1.18, taper: 0.06, sweep: 0.38, fin: 1.12, kit: 'gills', droop: 0.025 },
-  f2: { noseWidth: 1.48, podWidth: 1.14, podHeight: 1.17, taper: 0.065, sweep: 0.19, fin: 0.98, kit: 'gills', podSquare: 4.5, droop: 0.04 },
-};
+const FORMULA = { f1, f2 };
 function buildGeometry(vehicle) {
   if (formulaGeometry.has(vehicle)) return formulaGeometry.get(vehicle);
-  const shape = FORMULA[vehicle];
-  let intake, halo;
-  const paintR = [], carbonR = [], carbonC = [], blackR = [], chromeR = [];
-
-  // --- nose + monocoque + gearbox (central, half loft)
-  const mono = [
-    { x: 3.10, w: 0.045, y0: 0.222, y1: 0.268, n: 2.2 },
-    { x: 3.02, w: 0.075, y0: 0.205, y1: 0.292, n: 2.4 },
-    { x: 2.80, w: 0.105, y0: 0.200, y1: 0.325, n: 2.6 },
-    { x: 2.50, w: 0.135, y0: 0.205, y1: 0.372, n: 2.8 },
-    { x: 2.20, w: 0.165, y0: 0.215, y1: 0.425, n: 3.0 },
-    { x: 1.98, w: 0.190, y0: 0.220, y1: 0.468, n: 3.2 },
-    { x: 1.65, w: 0.225, y0: 0.200, y1: 0.535, n: 3.4, bw: 0.8 },
-    { x: 1.30, w: 0.280, y0: 0.150, y1: 0.600, n: 3.4, bw: 0.75 },
-    { x: 1.00, w: 0.325, y0: 0.110, y1: 0.645, n: 3.2, bw: 0.75 },
-    { x: 0.60, w: 0.355, y0: 0.090, y1: 0.665, n: 3.0, bw: 0.8 },
-    { x: 0.15, w: 0.365, y0: 0.085, y1: 0.672, n: 3.0, bw: 0.8 },
-    { x: -0.30, w: 0.355, y0: 0.085, y1: 0.660, n: 2.8, bw: 0.8 },
-    { x: -0.85, w: 0.300, y0: 0.090, y1: 0.610, n: 2.6, bw: 0.8 },
-    { x: -1.40, w: 0.215, y0: 0.115, y1: 0.540, n: 2.5 },
-    { x: -1.90, w: 0.135, y0: 0.180, y1: 0.465, n: 2.4 },
-    { x: -2.25, w: 0.075, y0: 0.255, y1: 0.405, n: 2.2 },
-    { x: -2.38, w: 0.045, y0: 0.290, y1: 0.375, n: 2.2 },
-  ];
-  for (const s of mono) {
-    const front = THREE.MathUtils.smoothstep(s.x, 1.15, 2.95);
-    s.w *= 1 + (shape.noseWidth - 1) * front;
-    s.y0 += (shape.droop || 0) * front; s.y1 += (shape.droop || 0) * front;
-  }
-  paintR.push(halfLoft(mono, 14));
-  // cockpit opening: a dark panel that hugs the top of the tub around the driver
-  {
-    const topY = (x, z) => {
-      let i = 0;
-      while (i < mono.length - 2 && mono[i + 1].x > x) i++;
-      const a = mono[i], b = mono[i + 1], f = (a.x - x) / (a.x - b.x);
-      const L = (k) => a[k] + (b[k] - a[k]) * f;
-      const w = L('w'), y0 = L('y0'), y1 = L('y1'), n = L('n');
-      const q = Math.min(0.999, Math.abs(z) / w);
-      return (y0 + y1) / 2 + ((y1 - y0) / 2) * Math.pow(1 - Math.pow(q, n), 1 / n);
-    };
-    const NX = 16, NZ = 6, pos = [], idx = [];
-    for (let i = 0; i <= NX; i++) {
-      const u = i / NX, x = 1.0 - u * 0.93;
-      const half = 0.255 * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(u * 2 - 1), 3.2)), 1 / 3.2) + 0.002;
-      for (let k = 0; k <= NZ; k++) { const z = (k / NZ) * half; pos.push(x, topY(x, z) + 0.004, z); }
-    }
-    for (let i = 0; i < NX; i++) for (let k = 0; k < NZ; k++) { const a = i * (NZ + 1) + k, b = a + 1, c = a + NZ + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
-    blackR.push(orient(g, 8 * (NZ + 1) + 2, 'y', 1));
-  }
-  // --- roll hoop / airbox / engine cover spine
-  paintR.push(halfLoft([
-    { x: 0.05, w: 0.085, y0: 0.640, y1: 0.930, n: 2.4 },
-    { x: -0.05, w: 0.118, y0: 0.630, y1: 0.962, n: 2.4 },
-    { x: -0.30, w: 0.150, y0: 0.600, y1: 0.968, n: 2.4 },
-    { x: -0.70, w: 0.150, y0: 0.560, y1: 0.920, n: 2.3 },
-    { x: -1.15, w: 0.115, y0: 0.520, y1: 0.815, n: 2.2 },
-    { x: -1.60, w: 0.070, y0: 0.470, y1: 0.700, n: 2.2 },
-    { x: -2.00, w: 0.035, y0: 0.430, y1: 0.585, n: 2.2 },
-    { x: -2.22, w: 0.015, y0: 0.410, y1: 0.500, n: 2.2 },
-  ], 12));
-  // shark fin (thin, on the centreline: built whole and kept un-mirrored via carbonC? it's paint -> use half thickness)
-  const fin = plate([[-0.75, 0.90], [-1.15, 0.80], [-1.95, 0.585], [-2.12, 0.60], [-2.12, 0.74], [-1.5, 0.93], [-0.95, 0.972]], 0.004, 0.008);
-  paintR.push(fin.translate(0, -0.53, 0).scale(1, shape.fin, 1).translate(0, 0.53, 0));
-  // --- sidepod: high inlet, undercut, downwash ramp to the floor
-  const pod = [
-    { x: 0.98, w: 0.150, y0: 0.330, y1: 0.585, n: 3.2, zo: 0.02 },
-    { x: 0.80, w: 0.215, y0: 0.250, y1: 0.615, n: 3.2, bw: 0.55, zo: 0.01 },
-    { x: 0.45, w: 0.262, y0: 0.160, y1: 0.625, n: 3.0, bw: 0.6 },
-    { x: 0.00, w: 0.272, y0: 0.115, y1: 0.600, n: 2.8, bw: 0.7 },
-    { x: -0.50, w: 0.262, y0: 0.095, y1: 0.520, n: 2.6, bw: 0.8, zo: -0.01 },
-    { x: -1.00, w: 0.215, y0: 0.085, y1: 0.400, n: 2.4, zo: -0.04 },
-    { x: -1.45, w: 0.150, y0: 0.080, y1: 0.275, n: 2.3, zo: -0.09 },
-    { x: -1.85, w: 0.075, y0: 0.080, y1: 0.170, n: 2.2, zo: -0.15 },
-    { x: -2.05, w: 0.030, y0: 0.080, y1: 0.120, n: 2.2, zo: -0.18 },
-  ];
-  for (const s of pod) {
-    if (shape.podSquare) s.n = shape.podSquare;
-    s.w *= shape.podWidth;
-    s.y1 *= shape.podHeight;
-    s.zo = (s.zo || 0) - shape.taper * Math.max(0, -s.x);
-  }
-  paintR.push(fullLoft(pod, 22, 0.50));
-  blackR.push(sectionCap({ ...pod[0], x: 0.972 }, 22, 0.50, 1)); // radiator inlet
-  if (shape.kit === 'gills') {
-    paintR.push(plate([[-0.46, 0.89], [-0.64, 1.12], [-0.93, 1.11], [-1.04, 1.01],
-      [-1.09, 1.08], [-1.43, 1.04], [-1.52, 0.94], [-1.57, 1.00], [-2.05, 0.86], [-2.06, 0.65]], 0.008));
-    for (let k = 0; k < 5; k++) carbonR.push(wing([
-      { z: 0.30, x: 0.10 - 0.15 * k, y: 0.73 - k * 0.021, c: 0.13, a: 18 },
-      { z: 0.57, x: -0.07 - 0.15 * k, y: 0.72 - k * 0.022, c: 0.12, a: 18 },
-      { z: 0.70, x: -0.18 - 0.15 * k, y: 0.65 - k * 0.025, c: 0.10, a: 18 },
-    ]));
-  }
-  // --- cockpit rim / headrest (U-shape around the helmet)
-  {
-    const pts = [[0.92, 0.655, 0.20], [0.70, 0.675, 0.255], [0.40, 0.70, 0.27], [0.15, 0.725, 0.235], [0.06, 0.74, 0.12], [0.045, 0.745, 0.0]].map((p) => new THREE.Vector3(...p));
-    const tube = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.052, 8);
-    blackR.push(tube);
-  }
-  // --- front wing: 4 swept elements + endplate
-  const span = [0, 0.14, 0.30, 0.50, 0.70, 0.86, 0.955];
-  const fw = (dx, dy, chord, aoa, inboard = 0) => wing(span.filter((z) => z >= inboard).map((z) => {
-    const q = z / 0.955;
-    return { z, x: 3.34 - shape.sweep * Math.pow(q, 1.7) - dx, y: 0.072 + 0.018 * q * q + dy * (1 - 0.25 * q), c: chord * (1 - 0.22 * q), a: aoa * (1 - 0.35 * q), t: 0.09 };
-  }));
-  carbonR.push(fw(0, 0, 0.27, 2));
-  carbonR.push(fw(0.215, 0.040, 0.20, 9));
-  if (vehicle !== 'f2') carbonR.push(fw(0.375, 0.090, 0.17, 17, 0.14));
-  paintR.push(slot(fw(0.515, 0.150, 0.15, 26, 0.14), 'T')); // top flap in team colours
-  { const o = [[2.52, 0.045], [3.04, 0.045], [3.03, 0.11], [2.90, 0.29], [2.52, 0.335]]; carbonR.push(plate(o, 0.968, 0.012)); paintR.push(slot(skin(o, 0.9745), 'F')); }
-  carbonR.push(box(0.5, 0.012, 0.09, 2.78, 0.046, 0.93)); // footplate
-  // nose camera winglet
-  carbonR.push(box(0.14, 0.012, 0.08, 2.45, 0.35, 0.17));
-  // --- floor + edge + fences + diffuser
-  carbonC.push(floorPlate([[1.32, 0.0], [1.32, 0.26], [1.22, 0.58], [0.95, 0.775], [-0.95, 0.80], [-1.22, 0.70], [-1.24, 0.57], [-1.98, 0.55], [-1.98, 0], [-1.98, -0.55], [-1.24, -0.57], [-1.22, -0.70], [-0.95, -0.80], [0.95, -0.775], [1.22, -0.58], [1.32, -0.26]], 0.075, 0.028));
-  for (let k = 0; k < 4; k++) carbonR.push(box(0.36, 0.13 - k * 0.012, 0.008, 1.08 - k * 0.02, 0.135, 0.32 + k * 0.085, 0, -0.16 - k * 0.07));
-  carbonR.push(box(1.3, 0.012, 0.06, -0.2, 0.10, 0.80)); // floor edge wing
-  { // diffuser ramp + strakes
-    const d = new THREE.BoxGeometry(0.62, 0.012, 0.52); d.rotateZ(-0.42); d.translate(-2.14, 0.185, 0.27); carbonR.push(d);
-    for (const z of [0.1, 0.3, 0.5]) carbonR.push(plate([[-1.86, 0.06], [-2.42, 0.06], [-2.42, 0.31], [-1.86, 0.075]], z, 0.008));
-  }
-  // --- rear wing: spoon main plane, beam wing, endplate, swan-neck pylon
-  const rspan = [0, 0.12, 0.25, 0.38, 0.47, 0.505];
-  carbonR.push(wing(rspan.map((z) => ({ z, x: -2.08, y: 0.775 + 0.055 * Math.pow(z / 0.505, 2.2), c: 0.36 - 0.03 * (z / 0.505), a: 13, t: 0.11 })), 7, 0.09));
-  carbonR.push(wing([0, 0.2, 0.40].map((z) => ({ z, x: -2.02, y: 0.44, c: 0.15, a: 14, t: 0.09 }))));
-  carbonR.push(wing([0, 0.2, 0.40].map((z) => ({ z, x: -2.13, y: 0.50, c: 0.13, a: 24, t: 0.09 }))));
-  { const o = [[-2.04, 0.52], [-2.40, 0.42], [-2.72, 0.42], [-2.75, 1.00], [-2.30, 1.03], [-2.08, 0.985], [-1.99, 0.70]]; carbonR.push(plate(o, 0.512, 0.014)); paintR.push(slot(skin(o, 0.5195), 'R')); }
-  carbonC.push(plate([[-1.96, 0.52], [-2.1, 0.52], [-2.24, 0.80], [-2.36, 0.83], [-2.2, 0.86], [-2.02, 0.62]], 0, 0.03));
-  // exhaust
-  { const e = new THREE.CylinderGeometry(0.055, 0.06, 0.22, 12, 1, true); e.rotateZ(Math.PI / 2 - 0.12); e.translate(-2.28, 0.47, 0); carbonC.push(e); }
-  // --- suspension (aero wishbones, push/pull rods, track rod, driveshaft)
-  const fh = (y) => [FRONT_X, y, FRONT_Z - 0.17];
-  carbonR.push(arm(fh(0.50), [2.28, 0.405, 0.15]), arm(fh(0.50), [1.55, 0.515, 0.21]));
-  carbonR.push(arm(fh(0.21), [2.25, 0.245, 0.13]), arm(fh(0.21), [1.50, 0.215, 0.17]));
-  carbonR.push(arm([FRONT_X, 0.24, FRONT_Z - 0.2], [1.86, 0.50, 0.19], 0.045, 0.02));
-  carbonR.push(arm([2.10, 0.37, FRONT_Z - 0.17], [2.12, 0.39, 0.16], 0.04, 0.016));
-  const rh = (y) => [REAR_X, y, REAR_Z - 0.22];
-  carbonR.push(arm(rh(0.50), [-1.20, 0.47, 0.22]), arm(rh(0.50), [-1.95, 0.44, 0.12]));
-  carbonR.push(arm(rh(0.21), [-1.15, 0.17, 0.24]), arm(rh(0.21), [-1.98, 0.21, 0.10]));
-  carbonR.push(rod([REAR_X, 0.36, REAR_Z - 0.2], [REAR_X, 0.36, 0.14], 0.022));
-  carbonR.push(arm([REAR_X, 0.48, REAR_Z - 0.22], [-1.5, 0.22, 0.2], 0.04, 0.02));
-  // brake ducts / uprights inside the wheels
-  for (const [ax, az, w] of [[FRONT_X, FRONT_Z, FRONT_W], [REAR_X, REAR_Z, REAR_W]]) {
-    const d = new THREE.CylinderGeometry(0.215, 0.215, 0.1, 20); d.rotateX(Math.PI / 2); d.translate(ax, WHEEL_R, az - w / 2 - 0.035); carbonR.push(d);
-  }
-  // over-wheel deflector on the front wheel
-  { const g = new THREE.BoxGeometry(0.42, 0.012, 0.10); g.rotateZ(-0.12); g.translate(FRONT_X + 0.02, 0.755, FRONT_Z - 0.20); carbonR.push(g); }
-  // --- mirrors
-  // (set forward and in-board enough to sit inside the driver's field of view; the glass itself is
-  // a separate mesh per side, added in buildCar, so the player's can show the live rear view)
-  carbonR.push(arm([1.0, 0.60, 0.36], [1.02, 0.715, 0.56], 0.05, 0.014));
-  paintR.push(box(0.06, 0.078, 0.185, 1.02, 0.735, 0.63));
-  chromeR.push(box(0.004, 0.07, 0.175, 0.9925, 0.735, 0.63)); // bright rim behind the glass
-  // --- halo
-  {
-    const pts = [[-0.06, 0.70, 0.315], [0.02, 0.80, 0.305], [0.22, 0.868, 0.285], [0.46, 0.878, 0.225], [0.64, 0.872, 0.125], [0.715, 0.868, 0.0]].map((p) => new THREE.Vector3(...p));
-    const t = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, 0.03, 10);
-    // the halo is its own mesh so it can be faded out of the cockpit view
-    const hr = finalize(t);
-    halo = mergeGeometries([hr, mirrored(hr, false), finalize(arm([1.02, 0.635, 0], [0.70, 0.865, 0], 0.06, 0.035))]);
-  }
-  // --- airbox intake + T-cam + antenna + rain light housing
-  { const g = new THREE.CircleGeometry(1, 20); g.scale(0.07, 0.115, 1); g.rotateY(Math.PI / 2); g.translate(0.052, 0.80, 0); intake = g; }
-  carbonC.push(box(0.11, 0.05, 0.26, -0.16, 0.995, 0));
-  carbonC.push(arm([1.55, 0.54, 0], [1.52, 0.66, 0], 0.012, 0.012));
-  carbonC.push(box(0.06, 0.09, 0.14, -2.40, 0.335, 0));
+  const { paintR, carbonR, carbonC, blackR, blackC, chromeR, haloR, haloC, flap } = FORMULA[vehicle]();
+  for (const g of paintR) if (g.userData.slot) slot(g, g.userData.slot);
+  const hR = haloR.map(finalize);
+  const halo = mergeGeometries([...hR, ...hR.map((g) => mirrored(g, false)), ...haloC.map(finalize)]);
 
   const paint = paintR.map((g) => projectUV(finalize(g), 1));
   const paintAll = mergeGeometries([...paint, ...paint.map((g) => mirrored(g, true))]);
   const cR = carbonR.map(finalize);
   const carbon = mergeGeometries([...cR, ...cR.map((g) => mirrored(g, false)), ...carbonC.map(finalize)]);
   const bR = blackR.map(finalize);
-  const black = mergeGeometries([...bR, ...bR.map((g) => mirrored(g, false)), finalize(intake)]);
+  const black = mergeGeometries([...bR, ...bR.map((g) => mirrored(g, false)), ...blackC.map(finalize)]);
   const chR = chromeR.map(finalize);
   const chrome = mergeGeometries([...chR, ...chR.map((g) => mirrored(g, false))]);
 
   // DRS flap, pivoting about its trailing edge at (-2.585, 1.005)
-  const flap = wing([-0.505, -0.47, -0.3, -0.1, 0.1, 0.3, 0.47, 0.505].map((z) => ({ z, x: 0.185, y: -0.105, c: 0.215, a: 30, t: 0.1 })), 6, 0.08);
-
   const flapG = finalize(flap);
   {
     flapG.computeBoundingBox();
@@ -1102,7 +749,7 @@ function makeFarCar(vehicle, bodyGeo, paint, axles, own) {
   const far = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ map: paint.map, color: paint.color, roughness: 0.5 });
   own.push(mat);
-  far.add(new THREE.Mesh(bodyGeo.paint, mat), new THREE.Mesh(farGeometry.get(vehicle), farMaterial));
+  far.add(new THREE.Mesh(bodyGeo.farPaint || bodyGeo.paint, mat), new THREE.Mesh(farGeometry.get(vehicle), farMaterial));
   for (const part of far.children) part.castShadow = part.receiveShadow = true;
   return far;
 }
@@ -1125,6 +772,8 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
     const lamp = new THREE.MeshStandardMaterial({ color: 0xf0f5ff, emissive: 0xcce4ff, emissiveIntensity: 2.2, roughness: 0.2 });
     own.push(accent, glass, lamp);
     add(bodyGeo.trim, accent); add(bodyGeo.glass, glass); add(bodyGeo.lamps, lamp, false);
+    if (bodyGeo.black) add(bodyGeo.black, S.black);
+    if (bodyGeo.chrome) add(bodyGeo.chrome, S.chrome, false);
   } else {
     const livery = liveryTexture(team);
     paint.map = livery.tex; own.push({ dispose: livery.release });
@@ -1255,7 +904,7 @@ export function buildCar(team, number, compoundColor = '#ffd400', vehicle = 'f1'
         if (face < 0) ring.rotation.y = Math.PI;
         spin.add(ring); walls.push(ring);
       }
-      const cover = new THREE.Mesh(closed ? G.spokes : G.cover, coverMat);
+      const cover = new THREE.Mesh(closed ? sport.rim || G.spokes : G.cover, coverMat);
       cover.position.z = side * (width / 2 - 0.012);
       if (side < 0) cover.rotation.y = Math.PI;
       spin.add(cover);

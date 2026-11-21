@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { VEHICLES } from '../sim/vehicles.js';
+import { SHELLS } from './cars/index.js';
 
 // Roof stations are [windscreen foot, front header, rear header, tail glass foot].
 const SHAPES = {
@@ -206,6 +207,11 @@ export function sportsGeometry(vehicle, design = {}) {
 
 const cache = new Map();
 export function sportsShell(vehicle) {
-  if (!cache.has(vehicle)) cache.set(vehicle, sportsGeometry(vehicle));
+  if (!cache.has(vehicle)) {
+    const shell = SHELLS[vehicle] ? SHELLS[vehicle](vehicle) : sportsGeometry(vehicle);
+    // distant cars reuse the painted body at a fraction of the detail
+    if (SHELLS[vehicle]) shell.geometry.farPaint = SHELLS[vehicle](vehicle, 0.3).geometry.paint;
+    cache.set(vehicle, shell);
+  }
   return cache.get(vehicle);
 }
