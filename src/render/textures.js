@@ -58,47 +58,59 @@ function tex(c, repeat = true, srgb = true) {
   return t;
 }
 
+// Canvases that are expensive to paint are painted once and shared; every caller gets its own
+// texture object (own repeat / filtering) over the same pixels.
+const CACHE = new Map();
+function cached(key, paint) {
+  if (!CACHE.has(key)) CACHE.set(key, paint());
+  return CACHE.get(key);
+}
+
 export function asphalt() {
   // 1024 px over 7 m (7 mm per texel). The surface is drawn as individual stones in bitumen,
   // each a couple of texels across, so it still reads as aggregate when the camera is close
-  // instead of dissolving into magnified noise.
-  const S = 1024;
-  const n = makeNoise(S, 5, 7);
-  const [c, g] = canvas(S, S);
-  const img = g.createImageData(S, S);
-  let seed = 3;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < S * S; i++) {
-    const v = (0.25 + (n[i] - 0.5) * 0.03 + (rnd() - 0.5) * 0.03) * 255;
-    const k = i * 4;
-    img.data[k] = v; img.data[k + 1] = v; img.data[k + 2] = v * 1.02; img.data[k + 3] = 255;
-  }
-  g.putImageData(img, 0, 0);
-  const stones = 150000;
-  for (let q = 0; q < stones; q++) {
-    const x = rnd() * S, y = rnd() * S, r = 0.7 + rnd() * rnd() * 2.4, t = rnd(), hue = rnd();
-    let v = 58 + t * 38;
-    if (t > 0.965) v = 120 + rnd() * 60;      // pale chippings
-    else if (t < 0.12) v = 38 + rnd() * 10;   // dark basalt
-    const cr = v * (1 + (hue - 0.5) * 0.1), cb = v * (1 - (hue - 0.5) * 0.12);
-    g.fillStyle = 'rgba(0,0,0,0.3)';
-    g.beginPath(); g.arc(x + 0.6, y + 0.6, r, 0, 6.3); g.fill();
-    g.fillStyle = `rgb(${cr | 0},${v | 0},${cb | 0})`;
-    g.beginPath(); g.ellipse(x, y, r, r * (0.6 + rnd() * 0.4), rnd() * 3.14, 0, 6.3); g.fill();
-  }
-  // height + roughness from the painted result: stones stand proud and are a little smoother
-  const px = g.getImageData(0, 0, S, S).data;
-  const hgt = new Float32Array(S * S);
-  const [rc, rg] = canvas(S, S);
-  const rimg = rg.createImageData(S, S);
-  for (let i = 0; i < S * S; i++) {
-    const l = px[i * 4 + 1] / 255;
-    hgt[i] = Math.min(1, l * 2.6);
-    const v = 0.93 - Math.min(0.2, Math.max(0, l - 0.2) * 0.9) + (n[i] - 0.5) * 0.08;
-    rimg.data[i * 4] = rimg.data[i * 4 + 1] = rimg.data[i * 4 + 2] = Math.min(255, v * 255); rimg.data[i * 4 + 3] = 255;
-  }
-  rg.putImageData(rimg, 0, 0);
-  const out = { map: tex(c), normal: tex(normalFromHeight(hgt, S, 1.6), true, false), rough: tex(rc, true, false) };
+  // instead of dissolving into magnified noise. Tones are those of a worn, sun-bleached race
+  // surface (mid grey), not fresh black bitumen.
+  const cv = cached('asphalt', () => {
+    const S = 1024;
+    const n = makeNoise(S, 5, 7);
+    const [c, g] = canvas(S, S);
+    const img = g.createImageData(S, S);
+    let seed = 3;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < S * S; i++) {
+      const v = (0.27 + (n[i] - 0.5) * 0.04 + (rnd() - 0.5) * 0.03) * 255;
+      const k = i * 4;
+      img.data[k] = v; img.data[k + 1] = v; img.data[k + 2] = v * 1.02; img.data[k + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const stones = 170000;
+    for (let q = 0; q < stones; q++) {
+      const x = rnd() * S, y = rnd() * S, r = 0.7 + rnd() * rnd() * 2.4, t = rnd(), hue = rnd();
+      let v = 72 + t * 40;
+      if (t > 0.975) v = 122 + rnd() * 30;      // pale chippings
+      else if (t < 0.12) v = 50 + rnd() * 12;   // dark basalt
+      const cr = v * (1 + (hue - 0.5) * 0.09), cb = v * (1 - (hue - 0.5) * 0.11);
+      g.fillStyle = 'rgba(0,0,0,0.32)';
+      g.beginPath(); g.arc(x + 0.6, y + 0.6, r, 0, 6.3); g.fill();
+      g.fillStyle = `rgb(${cr | 0},${v | 0},${cb | 0})`;
+      g.beginPath(); g.ellipse(x, y, r, r * (0.6 + rnd() * 0.4), rnd() * 3.14, 0, 6.3); g.fill();
+    }
+    // height + roughness from the painted result: stones stand proud and are a little smoother
+    const px = g.getImageData(0, 0, S, S).data;
+    const hgt = new Float32Array(S * S);
+    const [rc, rg] = canvas(S, S);
+    const rimg = rg.createImageData(S, S);
+    for (let i = 0; i < S * S; i++) {
+      const l = px[i * 4 + 1] / 255;
+      hgt[i] = Math.min(1, l * 2.2);
+      const v = 0.9 - Math.min(0.2, Math.max(0, l - 0.24) * 0.9) + (n[i] - 0.5) * 0.08;
+      rimg.data[i * 4] = rimg.data[i * 4 + 1] = rimg.data[i * 4 + 2] = Math.min(255, v * 255); rimg.data[i * 4 + 3] = 255;
+    }
+    rg.putImageData(rimg, 0, 0);
+    return { c, n: normalFromHeight(hgt, S, 1.6), r: rc };
+  });
+  const out = { map: tex(cv.c), normal: tex(cv.n, true, false), rough: tex(cv.r, true, false) };
   out.map.anisotropy = out.normal.anisotropy = 16;
   return out;
 }
@@ -144,21 +156,40 @@ export function grass(base = [70, 110, 40], dry = 0) { return turf(512, base, dr
 
 export function mowedGrass(base = [70, 115, 40], dry = 0.2) { return turf(512, base, dry, true, 21); }
 
+// Gravel-trap stone: rounded pebbles a centimetre or two across in a spread of limestone
+// tones, packed over a darker bed. 512 px over 2.4 m.
 export function gravel() {
-  const S = 256;
+  const S = 512;
   const [c, g] = canvas(S, S);
-  const img = g.createImageData(S, S);
   let seed = 17;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const hgt = new Float32Array(S * S);
-  for (let i = 0; i < S * S; i++) {
-    const r = rnd();
-    const v = 0.7 + r * 0.45;
-    hgt[i] = r;
-    img.data[i * 4] = 196 * v; img.data[i * 4 + 1] = 176 * v; img.data[i * 4 + 2] = 140 * v; img.data[i * 4 + 3] = 255;
+  g.fillStyle = '#6f6656'; g.fillRect(0, 0, S, S);
+  const [hc, hg] = canvas(S, S);
+  hg.fillStyle = '#000'; hg.fillRect(0, 0, S, S);
+  for (let q = 0; q < 26000; q++) {
+    const x = rnd() * S, y = rnd() * S, r = 1.6 + rnd() * rnd() * 3.6, t = rnd(), ang = rnd() * 3.14, sq = 0.6 + rnd() * 0.4;
+    let v = 150 + t * 62, warm = 0.05 + rnd() * 0.14;
+    if (t < 0.1) { v = 105 + rnd() * 25; warm = 0.02; }        // grey flint
+    else if (t > 0.94) { v = 222 + rnd() * 20; warm = 0.04; }  // pale quartz
+    const cr = v * (1 + warm * 0.5), cg = v, cb = v * (1 - warm * 1.5);
+    const hv = (120 + rnd() * 135) | 0;
+    // repeat pebbles that cross an edge so the texture tiles
+    const offs = [[0, 0]];
+    if (x < 6) offs.push([S, 0]); else if (x > S - 6) offs.push([-S, 0]);
+    if (y < 6) offs.push([0, S]); else if (y > S - 6) offs.push([0, -S]);
+    for (const [ox, oy] of offs) {
+      g.fillStyle = 'rgba(30,26,20,0.5)';
+      g.beginPath(); g.ellipse(x + ox + 0.8, y + oy + 0.9, r, r * sq, ang, 0, 6.3); g.fill();
+      g.fillStyle = `rgb(${Math.min(255, cr) | 0},${cg | 0},${cb | 0})`;
+      g.beginPath(); g.ellipse(x + ox, y + oy, r, r * sq, ang, 0, 6.3); g.fill();
+      hg.fillStyle = `rgb(${hv},${hv},${hv})`;
+      hg.beginPath(); hg.ellipse(x + ox, y + oy, r, r * sq, ang, 0, 6.3); hg.fill();
+    }
   }
-  g.putImageData(img, 0, 0);
-  return { map: tex(c), normal: tex(normalFromHeight(hgt, S, 3), true, false) };
+  const hp = hg.getImageData(0, 0, S, S).data;
+  const hgt = new Float32Array(S * S);
+  for (let i = 0; i < S * S; i++) hgt[i] = hp[i * 4] / 255;
+  return { map: tex(c), normal: tex(normalFromHeight(hgt, S, 2.2), true, false) };
 }
 
 export function sand() {
@@ -176,47 +207,134 @@ export function sand() {
   return tex(c);
 }
 
+// Painted concrete kerb, one colour pair per tile (v runs along the kerb, u across it from the
+// track edge outward). Paint is chipped back to concrete where tyres ride it, rubber is laid
+// along the direction of travel, and each block carries the moulded ribs of a real kerb.
+// Returns the colour map; kerbNormal() gives the matching relief.
 export function kerb(c1 = '#b81a1f', c2 = '#dcdcd8', stepped = false) {
-  const [c, g] = canvas(128, 256);
+  const W = 256, H = 512;
+  const [c, g] = canvas(W, H);
   let seed = stepped ? 73 : 29;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  g.fillStyle = c1; g.fillRect(0, 0, 128, 128);
-  g.fillStyle = c2; g.fillRect(0, 128, 128, 128);
-  // recessed sawtooth rib shading & block joints
-  g.fillStyle = 'rgba(0,0,0,0.28)';
-  g.fillRect(0, 0, 128, 5);
-  g.fillRect(0, 126, 128, 5);
-  g.fillStyle = 'rgba(255,255,255,0.16)';
-  g.fillRect(0, 5, 128, 3);
-  g.fillRect(0, 131, 128, 3);
+  const n = makeNoise(256, 5, stepped ? 5 : 9);
+  g.fillStyle = c1; g.fillRect(0, 0, W, H / 2);
+  g.fillStyle = c2; g.fillRect(0, H / 2, W, H / 2);
+  // moulded ribs across the kerb: lit leading edge, shadowed trailing edge
+  const ribs = stepped ? 16 : 20;
+  for (let k = 0; k < ribs; k++) {
+    const y = (k * H) / ribs;
+    g.fillStyle = 'rgba(0,0,0,0.2)'; g.fillRect(W * 0.1, y, W * 0.8, 3);
+    g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(W * 0.1, y + 3, W * 0.8, 2);
+  }
+  // joints between the cast blocks
+  for (const y of [0, H / 2]) {
+    g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, y - 2, W, 5);
+    g.fillStyle = 'rgba(255,255,255,0.14)'; g.fillRect(0, y + 3, W, 2);
+  }
+  g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, H - 2, W, 2);
   if (stepped) {
-    // double-stepped aggressive kerb: dark bevel shadow along inner and mid lip + drainage flutes
-    const grd = g.createLinearGradient(0, 0, 128, 0);
-    grd.addColorStop(0, 'rgba(0,0,0,0.34)'); grd.addColorStop(0.14, 'rgba(255,255,255,0.12)');
-    grd.addColorStop(0.52, 'rgba(0,0,0,0.22)'); grd.addColorStop(0.62, 'rgba(255,255,255,0.14)');
-    grd.addColorStop(0.92, 'rgba(0,0,0,0.28)'); grd.addColorStop(1, 'rgba(0,0,0,0.48)');
-    g.fillStyle = grd; g.fillRect(0, 0, 128, 256);
-    for (let y = 12; y < 256; y += 32) {
-      g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(8, y, 112, 6);
-      g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(8, y + 6, 112, 2);
-    }
+    const grd = g.createLinearGradient(0, 0, W, 0);
+    grd.addColorStop(0, 'rgba(0,0,0,0.3)'); grd.addColorStop(0.14, 'rgba(255,255,255,0.1)');
+    grd.addColorStop(0.5, 'rgba(0,0,0,0.2)'); grd.addColorStop(0.6, 'rgba(255,255,255,0.12)');
+    grd.addColorStop(0.92, 'rgba(0,0,0,0.24)'); grd.addColorStop(1, 'rgba(0,0,0,0.42)');
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
   } else {
-    g.fillStyle = 'rgba(0,0,0,0.24)'; g.fillRect(0, 0, 7, 256);
-    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(118, 0, 10, 256);
-    for (let y = 20; y < 256; y += 64) {
-      g.fillStyle = 'rgba(0,0,0,0.14)'; g.fillRect(6, y, 112, 3);
+    const grd = g.createLinearGradient(0, 0, W, 0);
+    grd.addColorStop(0, 'rgba(0,0,0,0.22)'); grd.addColorStop(0.07, 'rgba(0,0,0,0)');
+    grd.addColorStop(0.86, 'rgba(0,0,0,0)'); grd.addColorStop(1, 'rgba(0,0,0,0.3)');
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  }
+  // weathering pass on the pixels: paint flakes back to pale concrete, mostly on the track side
+  // and along block edges; sun-faded blotches; fine grit
+  const img = g.getImageData(0, 0, W, H);
+  const d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    const nv = n[(y % 256) * 256 + (x % 256)], nf = n[((y * 3 + 40) % 256) * 256 + ((x * 3 + 90) % 256)];
+    const u = x / W, by = (y % (H / 2)) / (H / 2);
+    const edge = Math.max(0, 1 - Math.min(by, 1 - by) * 14) * 0.25;
+    const ride = Math.exp(-((u - 0.3) ** 2) / 0.06) * 0.2;       // where the inside wheels cross
+    const flake = nv * 0.55 + nf * 0.45 + edge + ride + (rnd() - 0.5) * 0.12;
+    const fade = 0.9 + nv * 0.2;
+    let r = d[i] * fade, gg = d[i + 1] * fade, b = d[i + 2] * fade;
+    if (flake > 0.8) { const k = Math.min(1, (flake - 0.8) * 9); const cv = 150 + nf * 40; r += (cv - r) * k; gg += (cv - gg) * k; b += (cv * 0.96 - b) * k; }
+    const grit = 1 + (rnd() - 0.5) * 0.1;
+    d[i] = Math.min(255, r * grit); d[i + 1] = Math.min(255, gg * grit); d[i + 2] = Math.min(255, b * grit);
+  }
+  g.putImageData(img, 0, 0);
+  // rubber laid down along the direction of travel, densest over the inner third
+  for (let k = 0; k < 70; k++) {
+    const x = W * (0.06 + rnd() * rnd() * 0.8), y = rnd() * H, len = 60 + rnd() * 260, a = 0.05 + rnd() * 0.16;
+    for (const oy of [0, -H]) {
+      const grd = g.createLinearGradient(0, y + oy, 0, y + oy + len);
+      grd.addColorStop(0, 'rgba(14,14,16,0)'); grd.addColorStop(0.3, `rgba(14,14,16,${a})`); grd.addColorStop(1, 'rgba(14,14,16,0)');
+      g.fillStyle = grd; g.fillRect(x, y + oy, 5 + rnd() * 16, len);
     }
   }
-  // rubber scuffs & concrete grit from cars cutting apexes
-  for (let i = 0; i < 2400; i++) {
-    g.fillStyle = `rgba(0,0,0,${rnd() * 0.14})`;
-    g.fillRect(rnd() * 128, rnd() * 256, 2 + rnd() * 2, 2 + rnd() * 3);
+  const t = tex(c);
+  t.anisotropy = 16;
+  return t;
+}
+
+// Relief for the kerb texture above: sawtooth ribs across each block and the joints between blocks.
+export function kerbNormal(stepped = false) {
+  const W = 128, H = 512;
+  const hgt = new Float32Array(W * H);
+  const ribs = stepped ? 16 : 20, rl = H / ribs;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const u = x / W;
+    let h = (y % rl) / rl;                               // ramp up, then drop: a sawtooth
+    if (u < 0.1 || u > 0.9) h = 0.5;
+    const by = y % (H / 2);
+    if (by < 3 || by > H / 2 - 3) h = -0.6;              // joint
+    hgt[y * W + x] = h;
   }
-  for (let k = 0; k < 14; k++) {
-    g.fillStyle = `rgba(18,18,20,${0.09 + rnd() * 0.14})`;
-    g.fillRect(14 + rnd() * 76, rnd() * 220, 4 + rnd() * 14, 18 + rnd() * 55);
+  const [c, g] = canvas(W, H);
+  const img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const l = hgt[y * W + ((x - 1 + W) % W)], r = hgt[y * W + ((x + 1) % W)];
+    const u = hgt[((y - 1 + H) % H) * W + x], dn = hgt[((y + 1) % H) * W + x];
+    const nx = (l - r) * 1.2, ny = (u - dn) * 1.2, len = Math.hypot(nx, ny, 1);
+    const k = (y * W + x) * 4;
+    img.data[k] = ((nx / len) * 0.5 + 0.5) * 255; img.data[k + 1] = ((ny / len) * 0.5 + 0.5) * 255; img.data[k + 2] = ((1 / len) * 0.5 + 0.5) * 255; img.data[k + 3] = 255;
   }
-  return tex(c);
+  g.putImageData(img, 0, 0);
+  return tex(c, true, false);
+}
+
+// Thermoplastic road paint: off-white, with fine cracking, grit, chipped edges and tyre scuffs.
+// u runs across the line, v along it. Alpha carries the chipped edges and worn-through patches.
+export function paintLine() {
+  const W = 64, H = 1024;
+  const [c, g] = canvas(W, H);
+  let seed = 211;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const n = makeNoise(256, 5, 43);
+  const img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    const nv = n[((y >> 1) % 256) * 256 + ((x * 3) % 256)], nb = n[((y >> 3) % 256) * 256 + ((x + 77) % 256)];
+    const v = 226 + nv * 20 + (rnd() - 0.5) * 10 - nb * 16;
+    img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v * 0.97;
+    const edge = Math.min(x, W - 1 - x) / 6;                 // 0 at the edge .. 1 six texels in
+    let a = Math.min(1, edge + 0.55 - nv * 0.5);
+    img.data[i + 3] = Math.max(0, Math.min(1, a)) * 255;
+  }
+  g.putImageData(img, 0, 0);
+  // rubber dragged across and along the line
+  g.globalCompositeOperation = 'source-atop';
+  for (let k = 0; k < 46; k++) {
+    const y = rnd() * H, len = 40 + rnd() * 220, x = rnd() * W, w = 3 + rnd() * 9;
+    const grd = g.createLinearGradient(0, y, 0, y + len);
+    const a = 0.04 + rnd() * 0.1;
+    grd.addColorStop(0, 'rgba(20,20,22,0)'); grd.addColorStop(0.3, `rgba(20,20,22,${a})`); grd.addColorStop(1, 'rgba(20,20,22,0)');
+    g.fillStyle = grd;
+    g.fillRect(x, y, w, len);
+  }
+  g.globalCompositeOperation = 'source-over';
+  const t = tex(c);
+  t.anisotropy = 16;
+  return t;
 }
 
 // Raised anti-cut chicane "sausage" (baguette) kerb: bold amber-yellow with dark hazard ridges & scuffs
@@ -350,13 +468,17 @@ export function armco() {
 }
 
 export function checker() {
-  const [c, g] = canvas(128, 32);
-  for (let y = 0; y < 4; y++) for (let x = 0; x < 16; x++) {
-    g.fillStyle = (x + y) % 2 ? '#111' : '#f2f2f2';
-    g.fillRect(x * 8, y * 8, 8, 8);
+  // one tile = 2 x 2 squares; mipmapped, so the line stays clean at a distance instead of shimmering
+  const [c, g] = canvas(64, 64);
+  let seed = 5;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) {
+    g.fillStyle = (x + y) % 2 ? '#1a1a1b' : '#dededa';
+    g.fillRect(x * 32, y * 32, 32, 32);
   }
+  for (let k = 0; k < 500; k++) { g.fillStyle = `rgba(40,40,42,${rnd() * 0.12})`; g.fillRect(rnd() * 64, rnd() * 64, 1 + rnd() * 2, 1 + rnd() * 5); }
   const t = tex(c);
-  t.magFilter = THREE.NearestFilter;
+  t.anisotropy = 16;
   return t;
 }
 
